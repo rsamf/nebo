@@ -3,7 +3,9 @@ import { useStore } from '@/store'
 import type { RunSummary } from '@/lib/api'
 import { isRunLive } from '@/lib/api'
 import { byStartedDesc, childGroupsOf, runDisplayName } from '@/lib/runTree'
+import { DEFAULT_RUN_COLOR } from '@/lib/colors'
 import { Sparkline } from './Sparkline'
+import { MOBILE_ICON_BUTTON_CLASS } from './primitives'
 import { MOBILE_CARD_CLASS, firstLineSeriesValues, shortId, timeAgo } from './util'
 import { ArrowLeft, ChevronRight, Folder, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -111,11 +113,7 @@ function MobileSearchScreen({ onClose }: { onClose: () => void }) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b border-border px-3 pb-2.5 pt-3">
-        <button
-          onClick={onClose}
-          aria-label="Back to runs"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted"
-        >
+        <button onClick={onClose} aria-label="Back to runs" className={`${MOBILE_ICON_BUTTON_CLASS} bg-muted`}>
           <ArrowLeft className="h-4 w-4" />
         </button>
         <div className="flex flex-1 items-center gap-2 rounded-[10px] border border-border bg-muted/60 px-3">
@@ -154,15 +152,15 @@ export function MobileGroupCard({
   showFullPath?: boolean
 }) {
   const runTree = useStore(s => s.runTree)
-  const runsMap = useStore(s => s.runs)
   const selectGroup = useStore(s => s.selectGroup)
 
   const label = showFullPath ? path : (path.split('/').pop() ?? path)
   const docs = runTree.groups[path]?.docs ?? []
   const subgroupCount = childGroupsOf(runTree.groups, path).length
-  const runCount = Object.entries(runTree.runs).filter(
-    ([id, g]) => g === path && runsMap.has(id),
-  ).length
+  // Placements alone — the daemon already filters /tree to known runs,
+  // so no per-card existence probe against the runs map is needed.
+  let runCount = 0
+  for (const g of Object.values(runTree.runs)) if (g === path) runCount++
   const metaParts = [`${runCount} run${runCount === 1 ? '' : 's'}`]
   if (subgroupCount > 0) metaParts.push(`${subgroupCount} group${subgroupCount === 1 ? '' : 's'}`)
   if (docs.length > 0) metaParts.push(`${docs.length} note${docs.length === 1 ? '' : 's'}`)
@@ -185,7 +183,7 @@ export function MobileRunCard({ run }: { run: RunSummary }) {
   const customName = useStore(s => s.runNames.get(run.id))
   const runColor = useStore(s => s.runColors.get(run.id))
   const getOrAssignRunColor = useStore(s => s.getOrAssignRunColor)
-  const runState = useStore(s => s.runs).get(run.id)
+  const loggableMetrics = useStore(s => s.runs.get(run.id)?.loggableMetrics)
   const selectRun = useStore(s => s.selectRun)
 
   useEffect(() => {
@@ -193,8 +191,8 @@ export function MobileRunCard({ run }: { run: RunSummary }) {
   }, [run.id, getOrAssignRunColor])
 
   const live = isRunLive(run)
-  const color = runColor ?? 'transparent'
-  const spark = firstLineSeriesValues(runState?.loggableMetrics)
+  const color = runColor ?? DEFAULT_RUN_COLOR
+  const spark = useMemo(() => firstLineSeriesValues(loggableMetrics), [loggableMetrics])
 
   return (
     <button onClick={() => selectRun(run.id)} className={MOBILE_CARD_CLASS}>
@@ -208,7 +206,7 @@ export function MobileRunCard({ run }: { run: RunSummary }) {
           {shortId(run.id)} · {live ? 'live' : timeAgo(run.last_event_at)}
         </div>
       </div>
-      {spark && <Sparkline values={spark} color={runColor ?? '#60a5fa'} className="shrink-0" />}
+      {spark && <Sparkline values={spark} color={color} className="shrink-0" />}
       <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
     </button>
   )

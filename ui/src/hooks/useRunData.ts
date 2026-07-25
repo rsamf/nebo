@@ -73,7 +73,7 @@ function mergeMetrics(
 }
 
 function fetchSingleRun(runId: string, store: ReturnType<typeof useStore.getState>) {
-  const { setRunGraph, setRunLogs, setRunMetrics, setRunImages, setRunAudio } = store
+  const { setRunGraph, setRunLogs, setRunMetrics, setRunImages, setRunAudio, setRunAlerts } = store
   // Read the *current* live slice inside each `.then()` (not from the captured
   // `store` snapshot) so WS entries that landed during the fetch are merged in.
   const current = () => useStore.getState().runs.get(runId)
@@ -118,6 +118,9 @@ function fetchSingleRun(runId: string, store: ReturnType<typeof useStore.getStat
       }
       setRunAudio(runId, mergeByMediaId(mapped, current()?.loggableAudio ?? {}))
     }),
+    // setRunAlerts merges non-destructively itself (keyed dedupe against
+    // WS-appended entries), matching the other slices' merge semantics.
+    api.getRunAlerts(runId).then(d => setRunAlerts(runId, d.alerts)),
   ]).catch((err) => { console.warn(`[useRunData] Failed to fetch data for run ${runId}:`, err) })
 }
 

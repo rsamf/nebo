@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { createPortal } from 'react-dom'
 import { useStore } from '@/store'
 import { runDisplayName } from '@/lib/runTree'
+import { formatConfigValue } from '@/lib/utils'
 import { NeboMarkdown } from '@/components/shared/NeboMarkdown'
+import { Modal } from '@/components/ui/modal'
 import { MobileSheet } from './MobileSheet'
 import { Check, Copy } from 'lucide-react'
 
@@ -15,7 +16,7 @@ export function MobileRunInfoSheet({
   runId: string
   onClose: () => void
 }) {
-  const run = useStore(s => s.runs).get(runId)
+  const run = useStore(s => s.runs.get(runId))
   const customName = useStore(s => s.runNames.get(runId))
   const [idsOpen, setIdsOpen] = useState(false)
 
@@ -26,7 +27,7 @@ export function MobileRunInfoSheet({
   const configEntries = config ? Object.entries(config) : []
 
   return (
-    <MobileSheet open onClose={onClose} heightClass="h-[72vh]">
+    <MobileSheet onClose={onClose} heightClass="h-[72vh]">
       <div className="flex shrink-0 items-baseline gap-2 px-4 pb-3">
         <span className="min-w-0 flex-1 truncate text-base font-semibold">{name}</span>
         <button
@@ -44,6 +45,8 @@ export function MobileRunInfoSheet({
           </div>
           {description ? (
             <div className="rounded-xl border border-border bg-card px-4 py-3.5">
+              {/* Keep in lockstep with MobileGroupNotes' wrapper — the
+                  two markdown surfaces must match. */}
               <div className="prose prose-sm max-w-none dark:prose-invert">
                 <NeboMarkdown>{description}</NeboMarkdown>
               </div>
@@ -82,13 +85,8 @@ export function MobileRunInfoSheet({
   )
 }
 
-function formatConfigValue(v: unknown): string {
-  if (typeof v === 'object' && v !== null) return JSON.stringify(v)
-  return String(v)
-}
-
 function RunIdsDialog({ runId, onClose }: { runId: string; onClose: () => void }) {
-  const run = useStore(s => s.runs).get(runId)
+  const run = useStore(s => s.runs.get(runId))
   const runTree = useStore(s => s.runTree)
   const [copiedLabel, setCopiedLabel] = useState<string | null>(null)
 
@@ -108,45 +106,29 @@ function RunIdsDialog({ runId, onClose }: { runId: string; onClose: () => void }
     })
   }
 
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 px-6"
-      onClick={onClose}
-    >
-      <div
-        className="w-full rounded-2xl border border-border bg-background p-4"
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="mb-3.5 text-sm font-semibold">Run identifiers</div>
-        <div className="flex flex-col gap-2.5">
-          {rows.map(row => (
-            <button
-              key={row.label}
-              onClick={() => copy(row.label, row.value)}
-              className="flex items-center gap-2.5 rounded-[10px] border border-border bg-card px-3 py-2.5 text-left"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  {row.label}
-                </div>
-                <div className="break-all font-mono text-xs leading-[1.4]">{row.value}</div>
+  return (
+    <Modal open onClose={onClose} title="Run identifiers" widthClass="max-w-sm">
+      <div className="flex flex-col gap-2.5 p-4">
+        {rows.map(row => (
+          <button
+            key={row.label}
+            onClick={() => copy(row.label, row.value)}
+            className="flex items-center gap-2.5 rounded-[10px] border border-border bg-card px-3 py-2.5 text-left"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                {row.label}
               </div>
-              {copiedLabel === row.label ? (
-                <Check className="h-3.5 w-3.5 shrink-0 text-green-500" />
-              ) : (
-                <Copy className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              )}
-            </button>
-          ))}
-        </div>
-        <button
-          onClick={onClose}
-          className="mt-3.5 w-full rounded-[10px] border border-border py-2 text-xs font-medium text-muted-foreground"
-        >
-          Close
-        </button>
+              <div className="break-all font-mono text-xs leading-[1.4]">{row.value}</div>
+            </div>
+            {copiedLabel === row.label ? (
+              <Check className="h-3.5 w-3.5 shrink-0 text-green-500" />
+            ) : (
+              <Copy className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            )}
+          </button>
+        ))}
       </div>
-    </div>,
-    document.body,
+    </Modal>
   )
 }

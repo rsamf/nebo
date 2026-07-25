@@ -17,21 +17,23 @@ export function MobileSettingsSheet({
   const updateSetting = useStore(s => s.updateSetting)
   const labelKeySettings = useStore(s => s.labelKeySettings)
   const setLabelKeyOpacity = useStore(s => s.setLabelKeyOpacity)
-  const run = useStore(s => s.runs).get(runId)
+  // Keyed on the images slice, not the run — the run clones on every
+  // event, the images record only when an image lands.
+  const loggableImages = useStore(s => s.runs.get(runId)?.loggableImages)
 
   // Label keys present on this run's images (same scoping rule as
   // RightPanelSettings.visibleEntries).
   const visibleLabelTriples = useMemo(() => {
-    if (!run) return [] as string[]
+    if (!loggableImages) return [] as string[]
     const activePairs = new Set<string>()
-    for (const [loggableId, images] of Object.entries(run.loggableImages)) {
+    for (const [loggableId, images] of Object.entries(loggableImages)) {
       for (const img of images) activePairs.add(`${loggableId}|${img.name}`)
     }
     return Object.keys(labelKeySettings).filter(triple => {
       const [loggable, image] = triple.split('|')
       return activePairs.has(`${loggable}|${image}`)
     })
-  }, [run, labelKeySettings])
+  }, [loggableImages, labelKeySettings])
 
   const labelOpacity = useMemo(() => {
     if (visibleLabelTriples.length === 0) return 70
@@ -57,7 +59,7 @@ export function MobileSettingsSheet({
   }
 
   return (
-    <MobileSheet open={true} onClose={onClose}>
+    <MobileSheet onClose={onClose}>
       <div className="px-4 pb-8">
         <div className="mb-1 text-base font-semibold">View settings</div>
         <div className="mb-4 text-[11px] text-muted-foreground">

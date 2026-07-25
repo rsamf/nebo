@@ -5,6 +5,16 @@
 
 export type StreamModality = 'text' | 'image' | 'audio'
 
+export const STREAM_MODALITIES: StreamModality[] = ['text', 'image', 'audio']
+
+// Single source of the per-modality accent color — the desktop tracker
+// (chips + dot rows) and the mobile tracker sheet must agree.
+export const MODALITY_COLORS: Record<StreamModality, string> = {
+  text: '#3b82f6',
+  image: '#22c55e',
+  audio: '#f97316',
+}
+
 export interface StreamDatapoint {
   step: number | null
   timestamp: number

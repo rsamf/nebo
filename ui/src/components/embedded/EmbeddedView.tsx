@@ -1,9 +1,14 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '@/store'
 import { useRunData } from '@/hooks/useRunData'
-import { useEmbeddedView, resolveNodeRef, type EmbeddedView as EmbeddedSpec } from '@/hooks/useEmbeddedView'
+import { useIsDesktop } from '@/hooks/useMediaQuery'
+import { resolveNodeRef, type EmbeddedView as EmbeddedSpec } from '@/hooks/useEmbeddedView'
 import { DagGraph } from '@/components/graph/DagGraph'
 import { LoggableGridView } from '@/components/graph/LoggableGridView'
+import { MobileDagCanvas } from '@/components/mobile/MobileDagCanvas'
+import { MobileFeed } from '@/components/mobile/MobileFeed'
+import { MobileTracker } from '@/components/mobile/MobileTracker'
+import { MobileNodeSheet } from '@/components/mobile/MobileNodeSheet'
 import { LoggableTabContainer } from '@/components/node-tabs/LoggableTabContainer'
 import { MetricBlock } from '@/components/node-tabs/NodeMetrics'
 import { ImageItem } from '@/components/node-tabs/NodeImages'
@@ -12,6 +17,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip
 import { ConfigChips } from '@/components/shared/ConfigChips'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { DEFAULT_RUN_COLOR } from '@/lib/colors'
+import { mediaEntryKey } from '@/lib/utils'
 import { Tracker } from '@/components/timeline/Tracker'
 
 // Media galleries cap at the most recent N entries — embeds live in
@@ -32,6 +38,7 @@ export function EmbeddedView({ spec }: { spec: EmbeddedSpec }) {
   }, [spec.runId, selectRun])
 
   const run = useRunData(spec.runId)
+  const isDesktop = useIsDesktop()
 
   if (!run) {
     return (
@@ -42,12 +49,16 @@ export function EmbeddedView({ spec }: { spec: EmbeddedSpec }) {
   }
 
   switch (spec.kind) {
+    // The layout kinds have dedicated mobile renderings — a phone-width
+    // iframe (or a phone) gets the touch DAG/feed/tracker, not a shrunk
+    // ReactFlow canvas. Panel kinds below are layout-neutral either way.
     case 'run':
-      return <EmbeddedRun runId={spec.runId} />
     case 'dag':
-      return <EmbeddedNodes runId={spec.runId} />
     case 'flat':
-      return <EmbeddedGrid runId={spec.runId} />
+      if (!isDesktop) return <EmbeddedMobileLayout runId={spec.runId} kind={spec.kind} />
+      if (spec.kind === 'dag') return <EmbeddedNodes runId={spec.runId} />
+      if (spec.kind === 'flat') return <EmbeddedGrid runId={spec.runId} />
+      return <EmbeddedRun runId={spec.runId} />
     case 'node':
       return <EmbeddedNode spec={spec} />
     case 'logs':
@@ -73,6 +84,30 @@ function EmbeddedRun({ runId }: { runId: string }) {
         <DagGraph runId={runId} />
       </div>
       <Tracker runId={runId} />
+    </div>
+  )
+}
+
+// Phone-width rendering of the layout embed kinds. 'run' is the mobile
+// app's run-view body: DAG ⇄ Feed (toggled from the tracker bar, seeded
+// by the shared viewMode) over the heat-strip tracker. 'dag' and 'flat'
+// pin one view with no tracker. Node taps open the node sheet.
+function EmbeddedMobileLayout({ runId, kind }: { runId: string; kind: 'run' | 'dag' | 'flat' }) {
+  const [nodeSheet, setNodeSheet] = useState<string | null>(null)
+  const viewMode = useStore(s => s.viewMode)
+  const showDag = kind === 'dag' || (kind === 'run' && viewMode === 'graph')
+
+  return (
+    <div className="flex h-screen flex-col">
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {showDag ? (
+          <MobileDagCanvas runId={runId} onNodeTap={setNodeSheet} />
+        ) : (
+          <MobileFeed runId={runId} />
+        )}
+      </div>
+      {kind === 'run' && <MobileTracker runId={runId} />}
+      <MobileNodeSheet runId={runId} loggableId={nodeSheet} onClose={() => setNodeSheet(null)} />
     </div>
   )
 }
@@ -235,9 +270,7 @@ function EmbeddedImages({ spec }: { spec: EmbeddedSpec }) {
           <p className="text-xs text-muted-foreground">No images</p>
         ) : (
           items.map(({ loggableId, img }, i) => (
-            // mediaId is content-addressed, so identical frames logged at
-            // different steps share an id — qualify the key by position.
-            <ImageItem key={`${img.mediaId}:${i}`} runId={spec.runId} loggableId={loggableId} img={img} showTimestamp />
+            <ImageItem key={mediaEntryKey(img, i)} runId={spec.runId} loggableId={loggableId} img={img} showTimestamp />
           ))
         )}
       </div>
@@ -275,7 +308,7 @@ function EmbeddedAudio({ spec }: { spec: EmbeddedSpec }) {
           <p className="text-xs text-muted-foreground">No audio</p>
         ) : (
           items.map(({ entry }, i) => (
-            <AudioItem key={`${entry.mediaId}:${i}`} runId={spec.runId} entry={entry} showTimestamp />
+            <AudioItem key={mediaEntryKey(entry, i)} runId={spec.runId} entry={entry} showTimestamp />
           ))
         )}
         {/* loggableId currently unused in AudioItem, but we capture it so we
@@ -293,6 +326,3 @@ const EMPTY_LOGS: import('@/lib/api').LogEntry[] = []
 const EMPTY_METRICS_MAP: Record<string, Record<string, import('@/lib/api').LoggableMetricSeries>> = {}
 const EMPTY_IMAGES_MAP: Record<string, import('@/store').ImageEntry[]> = {}
 const EMPTY_AUDIO_MAP: Record<string, import('@/store').AudioEntry[]> = {}
-
-// Re-export for callers that need the parser without the renderer.
-export { useEmbeddedView } from '@/hooks/useEmbeddedView'

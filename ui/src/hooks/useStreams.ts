@@ -43,10 +43,10 @@ interface StreamCache {
 const cacheByRun = new Map<string, StreamCache>()
 
 export function useStreams(runId: string | null, enabled = true): StreamModel {
-  // Select the per-field refs, not the run object: REST hydration
-  // (useRunData) replaces these fields on a run mutated in place, so a
-  // `runs.get(runId)` selector would never see the change and the
-  // stream model would stay stale until the next WS clone of the run.
+  // Select per-field refs rather than the run object so the stream
+  // model only recomputes when a field it actually reads changes (the
+  // run object itself is cloned on every mutation, including ones —
+  // like metric appends — that streams don't care about).
   const logs = useStore(s => (runId ? s.runs.get(runId)?.logs : undefined))
   const loggableImages = useStore(s => (runId ? s.runs.get(runId)?.loggableImages : undefined))
   const loggableAudio = useStore(s => (runId ? s.runs.get(runId)?.loggableAudio : undefined))

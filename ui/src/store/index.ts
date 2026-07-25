@@ -249,6 +249,10 @@ interface NeboStore {
   timeline: TimelineState
   setTimelineMode: (mode: TimelineMode) => void
   setTimelineStep: (step: number | null) => void
+  // Select a step as the active playhead: flips mode to 'step' and sets
+  // the step in one update. The shared "click/scrub a chart point"
+  // action used by LineMetric, ScatterMetric and the mobile chart gate.
+  selectTimelineStep: (step: number) => void
   setTimelineTime: (time: number | null) => void
   setSelectedStream: (path: string | null) => void
 
@@ -429,6 +433,7 @@ export const useStore = create<NeboStore>((set, get) => ({
   timeline: { mode: 'time', step: null, time: null, selectedStream: null },
   setTimelineMode: (mode) => set(state => ({ timeline: { ...state.timeline, mode } })),
   setTimelineStep: (step) => set(state => ({ timeline: { ...state.timeline, step } })),
+  selectTimelineStep: (step) => set(state => ({ timeline: { ...state.timeline, mode: 'step', step } })),
   setTimelineTime: (time) => set(state => ({ timeline: { ...state.timeline, time } })),
   setSelectedStream: (path) => set(state => ({ timeline: { ...state.timeline, selectedStream: path } })),
 
@@ -491,12 +496,16 @@ export const useStore = create<NeboStore>((set, get) => ({
     return { labelKeySettings: next }
   }),
 
+  // Every mutator below clones the run object (matching processWsEvents),
+  // so `s.runs.get(id)` selectors fire on any change to that run — and
+  // ONLY that run. Never mutate a stored run in place: components with
+  // run-object selectors would silently miss the update.
   setRuns: (summaries, activeRunId) => set(state => {
     const runs = new Map(state.runs)
     for (const s of summaries) {
       const existing = runs.get(s.id)
       if (existing) {
-        existing.summary = s
+        runs.set(s.id, { ...existing, summary: s })
       } else {
         runs.set(s.id, {
           summary: s,
@@ -525,7 +534,7 @@ export const useStore = create<NeboStore>((set, get) => ({
     const runs = new Map(state.runs)
     const existing = runs.get(summary.id)
     if (existing) {
-      existing.summary = summary
+      runs.set(summary.id, { ...existing, summary })
     }
     return { runs }
   }),
@@ -534,8 +543,7 @@ export const useStore = create<NeboStore>((set, get) => ({
     const runs = new Map(state.runs)
     const run = runs.get(runId)
     if (run) {
-      run.graph = graph
-      run.loaded = true
+      runs.set(runId, { ...run, graph, loaded: true })
     }
 
     // Apply run-level UI defaults from nb.ui() exactly once per run so the
@@ -589,21 +597,21 @@ export const useStore = create<NeboStore>((set, get) => ({
   setRunLogs: (runId, logs) => set(state => {
     const runs = new Map(state.runs)
     const run = runs.get(runId)
-    if (run) run.logs = logs
+    if (run) runs.set(runId, { ...run, logs })
     return { runs }
   }),
 
   appendRunLog: (runId, log) => set(state => {
     const runs = new Map(state.runs)
     const run = runs.get(runId)
-    if (run) run.logs = [...run.logs, log]
+    if (run) runs.set(runId, { ...run, logs: [...run.logs, log] })
     return { runs }
   }),
 
   setRunMetrics: (runId, metrics) => set(state => {
     const runs = new Map(state.runs)
     const run = runs.get(runId)
-    if (run) run.loggableMetrics = metrics
+    if (run) runs.set(runId, { ...run, loggableMetrics: metrics })
     return { runs }
   }),
 
@@ -618,7 +626,7 @@ export const useStore = create<NeboStore>((set, get) => ({
         const newEntries = entries.filter(e => !existingIds.has(e.mediaId))
         merged[loggableId] = [...existing, ...newEntries]
       }
-      run.loggableImages = merged
+      runs.set(runId, { ...run, loggableImages: merged })
     }
     return { runs }
   }),
@@ -634,7 +642,7 @@ export const useStore = create<NeboStore>((set, get) => ({
         const newEntries = entries.filter(e => !existingIds.has(e.mediaId))
         merged[loggableId] = [...existing, ...newEntries]
       }
-      run.loggableAudio = merged
+      runs.set(runId, { ...run, loggableAudio: merged })
     }
     return { runs }
   }),
@@ -647,7 +655,7 @@ export const useStore = create<NeboStore>((set, get) => ({
       // so the same firing seen on both paths dedupes to one.
       const key = (a: AlertEntry) => `${a.timestamp}|${a.title}`
       const seen = new Set(alerts.map(key))
-      run.alerts = [...alerts, ...run.alerts.filter(a => !seen.has(key(a)))]
+      runs.set(runId, { ...run, alerts: [...alerts, ...run.alerts.filter(a => !seen.has(key(a)))] })
     }
     return { runs }
   }),
@@ -656,18 +664,23 @@ export const useStore = create<NeboStore>((set, get) => ({
     const runs = new Map(state.runs)
     const run = runs.get(runId)
     if (run) {
-      if (!run.loggableMetrics[loggableId]) run.loggableMetrics[loggableId] = {}
-      const existing = run.loggableMetrics[loggableId][name]
-      if (!existing) {
-        run.loggableMetrics[loggableId][name] = { type, entries: [entry] }
-      } else if (type === 'line' || type === 'scatter') {
-        existing.entries = [...existing.entries, entry]
-      } else {
-        // Bar / pie / histogram are snapshots — re-emitting the same
-        // name replaces the prior value rather than stacking another
-        // entry, mirroring the daemon's persistence model.
-        existing.entries = [entry]
-      }
+      const existing = run.loggableMetrics[loggableId]?.[name]
+      const nextSeries: LoggableMetricSeries =
+        !existing
+          ? { type, entries: [entry] }
+          : type === 'line' || type === 'scatter'
+            ? { ...existing, entries: [...existing.entries, entry] }
+            // Bar / pie / histogram are snapshots — re-emitting the same
+            // name replaces the prior value rather than stacking another
+            // entry, mirroring the daemon's persistence model.
+            : { ...existing, entries: [entry] }
+      runs.set(runId, {
+        ...run,
+        loggableMetrics: {
+          ...run.loggableMetrics,
+          [loggableId]: { ...(run.loggableMetrics[loggableId] ?? {}), [name]: nextSeries },
+        },
+      })
     }
     return { runs }
   }),
@@ -676,13 +689,16 @@ export const useStore = create<NeboStore>((set, get) => ({
     const runs = new Map(state.runs)
     const run = runs.get(runId)
     if (run?.graph?.nodes[nodeId]) {
-      run.graph = {
-        ...run.graph,
-        nodes: {
-          ...run.graph.nodes,
-          [nodeId]: { ...run.graph.nodes[nodeId], progress },
+      runs.set(runId, {
+        ...run,
+        graph: {
+          ...run.graph,
+          nodes: {
+            ...run.graph.nodes,
+            [nodeId]: { ...run.graph.nodes[nodeId], progress },
+          },
         },
-      }
+      })
     }
     return { runs }
   }),
@@ -691,16 +707,19 @@ export const useStore = create<NeboStore>((set, get) => ({
     const runs = new Map(state.runs)
     const run = runs.get(runId)
     if (run?.graph?.nodes[loggableId]) {
-      run.graph = {
-        ...run.graph,
-        nodes: {
-          ...run.graph.nodes,
-          [loggableId]: {
-            ...run.graph.nodes[loggableId],
-            exec_count: run.graph.nodes[loggableId].exec_count + 1,
+      runs.set(runId, {
+        ...run,
+        graph: {
+          ...run.graph,
+          nodes: {
+            ...run.graph.nodes,
+            [loggableId]: {
+              ...run.graph.nodes[loggableId],
+              exec_count: run.graph.nodes[loggableId].exec_count + 1,
+            },
           },
         },
-      }
+      })
     }
     return { runs }
   }),
@@ -711,7 +730,7 @@ export const useStore = create<NeboStore>((set, get) => ({
     if (run?.graph) {
       const exists = run.graph.edges.some(e => e.source === source && e.target === target)
       if (!exists) {
-        run.graph = {
+        const graph = {
           ...run.graph,
           edges: [...run.graph.edges, { source, target }],
           nodes: {
@@ -721,7 +740,11 @@ export const useStore = create<NeboStore>((set, get) => ({
             } : {}),
           },
         }
-        run.summary.edge_count = run.graph.edges.length
+        runs.set(runId, {
+          ...run,
+          graph,
+          summary: { ...run.summary, edge_count: graph.edges.length },
+        })
       }
     }
     return { runs }
@@ -731,7 +754,7 @@ export const useStore = create<NeboStore>((set, get) => ({
     const runs = new Map(state.runs)
     const run = runs.get(runId)
     if (run?.graph) {
-      run.graph = { ...run.graph, workflow_description: description }
+      runs.set(runId, { ...run, graph: { ...run.graph, workflow_description: description } })
     }
     return { runs }
   }),

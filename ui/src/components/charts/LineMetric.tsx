@@ -155,8 +155,8 @@ export const LineMetric = memo(function LineMetric({
   const dpr = useChartDpr()
   const timelineMode = useStore(s => s.timeline.mode)
   const timelineStep = useStore(s => s.timeline.step)
-  const setTimelineMode = useStore(s => s.setTimelineMode)
   const setTimelineStep = useStore(s => s.setTimelineStep)
+  const selectTimelineStep = useStore(s => s.selectTimelineStep)
   const lineSmoothing = useStore(s => s.settings.lineSmoothing ?? 0)
 
   const isFiltering = timelineMode === 'step' && timelineStep != null
@@ -220,10 +220,9 @@ export const LineMetric = memo(function LineMetric({
         setTimelineStep(null)
         return
       }
-      if (timelineMode !== 'step') setTimelineMode('step')
-      setTimelineStep(step)
+      selectTimelineStep(step)
     },
-    [timelineMode, timelineStep, setTimelineMode, setTimelineStep],
+    [timelineMode, timelineStep, selectTimelineStep, setTimelineStep],
   )
 
   const config: ChartConfiguration<'line'> = useMemo(() => {

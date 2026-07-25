@@ -180,36 +180,40 @@ function numericValues(entry: MetricEntry): number[] {
   )
 }
 
-// Union of scatter points across emissions; on-wire shape is
-// {label: {x: [...], y: [...]}} with a defensive path for [x, y] pairs.
+const MAX_PREVIEW_POINTS = 90
+
+// Union of scatter points across emissions; the on-wire/store shape is
+// {label: {x: [...], y: [...]}} (see ScatterMetric, which enforces the
+// same shape). Two passes: count first, then allocate only the ~90
+// stride-sampled points — accumulating scatters can hold thousands.
 function scatterPoints(entries: MetricEntry[]): { x: number; y: number }[] {
-  const pts: { x: number; y: number }[] = []
-  for (const e of entries) {
-    const v = e.value
-    if (!v || typeof v !== 'object') continue
-    for (const val of Object.values(v as Record<string, unknown>)) {
-      if (Array.isArray(val)) {
-        for (const p of val) {
-          if (Array.isArray(p) && p.length >= 2 && typeof p[0] === 'number' && typeof p[1] === 'number') {
-            pts.push({ x: p[0], y: p[1] })
-          }
-        }
-      } else if (val && typeof val === 'object') {
+  const eachSlot = (fn: (xs: unknown[], ys: unknown[]) => void) => {
+    for (const e of entries) {
+      const v = e.value
+      if (!v || typeof v !== 'object') continue
+      for (const val of Object.values(v as Record<string, unknown>)) {
+        if (!val || typeof val !== 'object') continue
         const xs = (val as { x?: unknown }).x
         const ys = (val as { y?: unknown }).y
-        if (Array.isArray(xs) && Array.isArray(ys)) {
-          const n = Math.min(xs.length, ys.length)
-          for (let i = 0; i < n; i++) {
-            if (typeof xs[i] === 'number' && typeof ys[i] === 'number') pts.push({ x: xs[i], y: ys[i] })
-          }
-        }
+        if (Array.isArray(xs) && Array.isArray(ys)) fn(xs, ys)
       }
     }
   }
-  // Even stride down to ~90 points so dense clouds stay cheap.
-  if (pts.length > 90) {
-    const stride = Math.ceil(pts.length / 90)
-    return pts.filter((_, i) => i % stride === 0)
-  }
+  let total = 0
+  eachSlot(xs => {
+    total += xs.length
+  })
+  if (total === 0) return []
+  const stride = Math.max(1, Math.ceil(total / MAX_PREVIEW_POINTS))
+  const pts: { x: number; y: number }[] = []
+  let i = 0
+  eachSlot((xs, ys) => {
+    const n = Math.min(xs.length, ys.length)
+    for (let j = 0; j < n; j++, i++) {
+      if (i % stride === 0 && typeof xs[j] === 'number' && typeof ys[j] === 'number') {
+        pts.push({ x: xs[j] as number, y: ys[j] as number })
+      }
+    }
+  })
   return pts
 }

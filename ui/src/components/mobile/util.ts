@@ -10,7 +10,7 @@ export const MOBILE_CARD_CLASS =
 
 /** Shortened run id for compact metadata rows. */
 export function shortId(id: string): string {
-  return id.length > 8 ? id.slice(0, 8) : id
+  return id.slice(0, 8)
 }
 
 /** Compact relative time since an epoch-seconds timestamp. */
@@ -32,9 +32,8 @@ export function elapsedLabel(seconds: number): string {
   return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`
 }
 
-// Both sparkline helpers take the loggableMetrics record (not the run):
-// the store mutates runs in place, so callers must key re-computation on
-// the replaced field refs rather than the stable run object.
+// The metric helpers take the loggableMetrics record (not the run) so
+// callers can memoize on the narrowest field ref that actually changes.
 
 /** Numeric values of the run's first accumulating line series — the
  *  sparkline shown on run cards. Null when nothing suitable is loaded. */
@@ -86,44 +85,33 @@ export function nearestAtStep<T extends { step: number | null }>(
 ): T | null {
   if (!entries || entries.length === 0) return null
   const target = step ?? 0
-  let best: T | null = null
-  let bestStep = -Infinity
-  for (const e of entries) {
-    const s = e.step ?? 0
-    if (s <= target && s >= bestStep) {
-      best = e
-      bestStep = s
+  // Entries append in emission order, so steps are non-decreasing —
+  // binary-search the last entry with step <= target. Called per DAG
+  // node per render (and per scrub frame), so O(log n) matters at
+  // thousands of media entries.
+  let lo = 0
+  let hi = entries.length - 1
+  let best = -1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if ((entries[mid].step ?? 0) <= target) {
+      best = mid
+      lo = mid + 1
+    } else {
+      hi = mid - 1
     }
   }
-  return best ?? entries[0]
+  return entries[best === -1 ? 0 : best]
 }
 
-/** Latest displayable value for a metric series, used on feed cards. */
-export function latestMetricLabel(series: { type: string; entries: MetricEntry[] }): string {
+/** Compact label for a line metric's latest value (the feed-card
+ *  headline; other chart types render a MetricPreview instead). */
+export function latestMetricLabel(series: { entries: MetricEntry[] }): string {
   const last = series.entries[series.entries.length - 1]
-  if (!last) return ''
-  if (series.type === 'line') return formatNumber(last.value)
-  if (series.type === 'scatter') {
-    let n = 0
-    for (const e of series.entries) {
-      const v = e.value
-      if (v && typeof v === 'object') {
-        for (const pts of Object.values(v as Record<string, { x?: unknown[] }>)) {
-          n += Array.isArray(pts) ? pts.length : (pts?.x?.length ?? 0)
-        }
-      }
-    }
-    return `${n} pts`
-  }
-  const v = last.value
-  if (v && typeof v === 'object') {
-    const n = Object.keys(v as Record<string, unknown>).length
-    return `${n} ${series.type === 'histogram' ? (n === 1 ? 'label' : 'labels') : (n === 1 ? 'category' : 'categories')}`
-  }
-  return formatNumber(v)
+  return last ? formatNumber(last.value) : ''
 }
 
-export function formatNumber(v: unknown): string {
+function formatNumber(v: unknown): string {
   if (typeof v !== 'number' || !Number.isFinite(v)) return String(v ?? '')
   const abs = Math.abs(v)
   if (abs >= 1e6) return `${(v / 1e6).toFixed(1)}M`

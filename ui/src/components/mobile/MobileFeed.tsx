@@ -10,8 +10,9 @@ import { ImageWithLabels } from '@/components/shared/ImageWithLabels'
 import { Modal } from '@/components/ui/modal'
 import { LongPressChartGate } from './LongPressChartGate'
 import { MetricPreview } from './MetricPreview'
+import { Chip, LEVEL_FILTERS, Segmented, type LevelFilter } from './primitives'
 import { latestMetricLabel, loggableDisplayName } from './util'
-import { cn } from '@/lib/utils'
+import { cn, formatTimestamp, mediaEntryKey } from '@/lib/utils'
 
 // Flat feed of everything the run logs: a pipeline-stage chip rail and a
 // type filter on top, then one card per metric / media stream / log tail.
@@ -20,17 +21,15 @@ import { cn } from '@/lib/utils'
 
 type TypeFilter = 'all' | 'metrics' | 'media' | 'logs'
 
-const TYPE_FILTERS: { key: TypeFilter; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'metrics', label: 'Metrics' },
-  { key: 'media', label: 'Media' },
-  { key: 'logs', label: 'Logs' },
+const TYPE_FILTERS: { value: TypeFilter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'metrics', label: 'Metrics' },
+  { value: 'media', label: 'Media' },
+  { value: 'logs', label: 'Logs' },
 ]
 
-const LOG_LEVELS = ['All', 'Info', 'Warn', 'Error'] as const
-
 export function MobileFeed({ runId }: { runId: string }) {
-  const run = useStore(s => s.runs).get(runId)
+  const run = useStore(s => s.runs.get(runId))
   const runColor = useStore(s => s.runColors.get(runId)) ?? DEFAULT_RUN_COLOR
   const [stage, setStage] = useState<string | null>(null)
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
@@ -38,16 +37,28 @@ export function MobileFeed({ runId }: { runId: string }) {
   const globalId = run?.globalLoggable?.loggableId ?? '__global__'
   const agentId = run?.agentLoggable?.loggableId ?? '__agent__'
 
+  // One pass over the (potentially 10k+) log array per change, instead
+  // of each stage row re-filtering the whole thing.
+  const logsByStage = useMemo(() => {
+    const out = new Map<string, LogEntry[]>()
+    for (const l of run?.logs ?? []) {
+      const id = l.node ?? globalId
+      const arr = out.get(id)
+      if (arr) arr.push(l)
+      else out.set(id, [l])
+    }
+    return out
+  }, [run?.logs, globalId])
+
   // Stage rail: every DAG node (registration order), then global/agent
-  // when they have content. Computed per render, not memoized — the
-  // store mutates the run in place so no dependency array keys this
-  // correctly, and the walk is cheap at feed scale.
+  // when they have content. O(nodes) with map lookups — cheap enough to
+  // run per render.
   const stages: string[] = Object.keys(run?.graph?.nodes ?? {})
   const hasContent = (id: string) =>
     Object.keys(run?.loggableMetrics[id] ?? {}).length > 0 ||
     (run?.loggableImages[id]?.length ?? 0) > 0 ||
     (run?.loggableAudio[id]?.length ?? 0) > 0 ||
-    (run?.logs.some(l => (l.node ?? globalId) === id) ?? false)
+    logsByStage.has(id)
   for (const extra of [globalId, agentId]) {
     if (!stages.includes(extra) && hasContent(extra)) stages.push(extra)
   }
@@ -63,9 +74,9 @@ export function MobileFeed({ runId }: { runId: string }) {
           the scroller (rail px-4) and on the non-scrolling row (mx-4). */}
       <div className="shrink-0 border-b border-border">
         <div className="no-scrollbar flex gap-2 overflow-x-auto px-4 pb-2.5 pt-3">
-          <StageChip label="All" active={stage === null} onTap={() => setStage(null)} />
+          <Chip label="All" active={stage === null} onTap={() => setStage(null)} />
           {stages.map(id => (
-            <StageChip
+            <Chip
               key={id}
               label={loggableDisplayName(run, id)}
               active={stage === id}
@@ -73,20 +84,12 @@ export function MobileFeed({ runId }: { runId: string }) {
             />
           ))}
         </div>
-        <div className="mx-4 mb-2.5 flex gap-0.5 rounded-[9px] bg-muted p-0.5">
-          {TYPE_FILTERS.map(f => (
-            <button
-              key={f.key}
-              onClick={() => setTypeFilter(f.key)}
-              className={cn(
-                'flex-1 rounded-[7px] py-1 text-xs font-medium',
-                typeFilter === f.key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground',
-              )}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
+        <Segmented
+          className="mx-4 mb-2.5"
+          options={TYPE_FILTERS}
+          value={typeFilter}
+          onChange={setTypeFilter}
+        />
       </div>
 
       <div className="flex flex-1 flex-col gap-2.5 overflow-y-auto px-4 pb-5 pt-3">
@@ -96,7 +99,7 @@ export function MobileFeed({ runId }: { runId: string }) {
             runId={runId}
             loggableId={id}
             nodeLabel={loggableDisplayName(run, id)}
-            globalId={globalId}
+            logs={logsByStage.get(id)}
             typeFilter={typeFilter}
             color={runColor}
           />
@@ -111,45 +114,25 @@ export function MobileFeed({ runId }: { runId: string }) {
   )
 }
 
-function StageChip({ label, active, onTap }: { label: string; active: boolean; onTap: () => void }) {
-  return (
-    <button
-      onClick={onTap}
-      className={cn(
-        'shrink-0 whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-medium',
-        active
-          ? 'border-primary/40 bg-primary/15 text-foreground'
-          : 'border-border bg-card text-muted-foreground',
-      )}
-    >
-      {label}
-    </button>
-  )
-}
-
 function StageRows({
   runId,
   loggableId,
   nodeLabel,
-  globalId,
+  logs,
   typeFilter,
   color,
 }: {
   runId: string
   loggableId: string
   nodeLabel: string
-  globalId: string
+  logs: LogEntry[] | undefined
   typeFilter: TypeFilter
   color: string
 }) {
-  const run = useStore(s => s.runs).get(runId)
+  const run = useStore(s => s.runs.get(runId))
   const metrics = run?.loggableMetrics[loggableId] ?? {}
   const images = run?.loggableImages[loggableId]
   const audio = run?.loggableAudio[loggableId]
-  const logs = useMemo(
-    () => (run?.logs ?? []).filter(l => (l.node ?? globalId) === loggableId),
-    [run?.logs, globalId, loggableId],
-  )
 
   const imagesByName = useMemo(() => groupByName(images ?? []), [images])
   const audioByName = useMemo(() => groupByName(audio ?? []), [audio])
@@ -189,7 +172,7 @@ function StageRows({
           ))}
         </>
       )}
-      {(typeFilter === 'all' || typeFilter === 'logs') && logs.length > 0 && (
+      {(typeFilter === 'all' || typeFilter === 'logs') && logs && logs.length > 0 && (
         <LogsFeedCard key={`l:${loggableId}`} logs={logs} nodeLabel={nodeLabel} />
       )}
     </>
@@ -220,8 +203,7 @@ function MetricFeedCard({
 }) {
   const [expanded, setExpanded] = useState(false)
   const lineSmoothing = useStore(s => s.settings.lineSmoothing ?? 0)
-  const setTimelineMode = useStore(s => s.setTimelineMode)
-  const setTimelineStep = useStore(s => s.setTimelineStep)
+  const selectTimelineStep = useStore(s => s.selectTimelineStep)
 
   const allLabels = useMemo(
     () =>
@@ -230,7 +212,6 @@ function MetricFeedCard({
         : [],
     [series.type, series.entries],
   )
-  const activeLabels = useMemo(() => new Set(allLabels), [allLabels])
 
   // While a long-pressed line chart is focused, the step filter follows
   // the finger — the touch replacement for LineMetric's built-in click
@@ -241,10 +222,9 @@ function MetricFeedCard({
     (x: number) => {
       const rounded = Math.round(x)
       const t = useStore.getState().timeline
-      if (t.mode !== 'step') setTimelineMode('step')
-      if (t.step !== rounded) setTimelineStep(rounded)
+      if (t.mode !== 'step' || t.step !== rounded) selectTimelineStep(rounded)
     },
-    [setTimelineMode, setTimelineStep],
+    [selectTimelineStep],
   )
 
   return (
@@ -274,7 +254,6 @@ function MetricFeedCard({
             entries={series.entries}
             color={color}
             allLabels={allLabels}
-            activeLabels={series.type === 'histogram' ? activeLabels : undefined}
             fill
           />
         </LongPressChartGate>
@@ -313,9 +292,9 @@ function ImageFeedCard({
         <div className="text-[11px] text-muted-foreground">No images at this step</div>
       ) : (
         <div className="no-scrollbar flex gap-2 overflow-x-auto">
-          {visible.map(e => (
+          {visible.map((e, i) => (
             <button
-              key={e.mediaId + (e.step ?? '')}
+              key={mediaEntryKey(e, i)}
               onClick={() => setLightbox(e)}
               className="relative h-24 w-24 shrink-0 overflow-hidden rounded-lg border border-border"
             >
@@ -382,8 +361,8 @@ function AudioFeedCard({
         <div className="text-[11px] text-muted-foreground">No audio at this step</div>
       ) : (
         <div className="flex flex-col gap-2">
-          {visible.map(e => (
-            <div key={e.mediaId + (e.step ?? '')} className="flex items-center gap-2">
+          {visible.map((e, i) => (
+            <div key={mediaEntryKey(e, i)} className="flex items-center gap-2">
               {e.step != null && (
                 <span className="shrink-0 font-mono text-[10px] text-muted-foreground">s{e.step}</span>
               )}
@@ -397,7 +376,7 @@ function AudioFeedCard({
 }
 
 function LogsFeedCard({ logs, nodeLabel }: { logs: LogEntry[]; nodeLabel: string }) {
-  const [level, setLevel] = useState<(typeof LOG_LEVELS)[number]>('All')
+  const [level, setLevel] = useState<LevelFilter>('All')
   const timelineFilter = useTimelineFilter()
 
   const visible = useMemo(() => {
@@ -418,19 +397,8 @@ function LogsFeedCard({ logs, nodeLabel }: { logs: LogEntry[]; nodeLabel: string
         <span className="shrink-0 text-[11px] text-muted-foreground">{nodeLabel} · tail</span>
       </div>
       <div className="mb-2 flex gap-1.5">
-        {LOG_LEVELS.map(lvl => (
-          <button
-            key={lvl}
-            onClick={() => setLevel(lvl)}
-            className={cn(
-              'rounded-full border px-2.5 py-0.5 text-[10.5px] font-medium',
-              level === lvl
-                ? 'border-primary/40 bg-primary/15 text-foreground'
-                : 'border-border bg-transparent text-muted-foreground',
-            )}
-          >
-            {lvl}
-          </button>
+        {LEVEL_FILTERS.map(lvl => (
+          <Chip key={lvl} label={lvl} active={level === lvl} onTap={() => setLevel(lvl)} />
         ))}
       </div>
       <div className="no-scrollbar max-h-40 overflow-y-auto font-mono">
@@ -446,9 +414,7 @@ function LogsFeedCard({ logs, nodeLabel }: { logs: LogEntry[]; nodeLabel: string
               (l.level === 'warning' || l.level === 'warn') && 'text-yellow-500',
             )}
           >
-            <span className="mr-1.5 text-muted-foreground">
-              {new Date(l.timestamp * 1000).toLocaleTimeString([], { hour12: false })}
-            </span>
+            <span className="mr-1.5 text-muted-foreground">{formatTimestamp(l.timestamp)}</span>
             {l.message}
           </div>
         ))}

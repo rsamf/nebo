@@ -7,6 +7,13 @@ export function byStartedDesc(a: RunSummary, b: RunSummary): number {
   return bt - at
 }
 
+/** Index run summaries by id — the shape `membersOf` consumes. */
+export function summariesById(
+  runs: Map<string, { summary: RunSummary }>,
+): Map<string, RunSummary> {
+  return new Map(Array.from(runs.values(), r => [r.summary.id, r.summary]))
+}
+
 /** The runs placed directly in `path` (not in its subgroups), newest first.
  *  Placements naming runs the store hasn't loaded are skipped. */
 export function membersOf(

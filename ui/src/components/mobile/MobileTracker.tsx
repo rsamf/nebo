@@ -2,10 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Chart } from 'chart.js'
 import { useStore } from '@/store'
 import { useStreams } from '@/hooks/useStreams'
+import { useTagChips } from '@/components/charts/useTagChips'
 import { DEFAULT_RUN_COLOR } from '@/lib/colors'
 import { withAlpha } from '@/components/charts/withAlpha'
-import type { StreamLeaf, StreamModality } from '@/lib/streams'
+import { MODALITY_COLORS, STREAM_MODALITIES, type StreamLeaf } from '@/lib/streams'
 import { MobileSheet } from './MobileSheet'
+import { Chip, Segmented } from './primitives'
 import { elapsedLabel } from './util'
 import { ChevronLeft, ChevronRight, ChevronUp, GitBranch, Rows3 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -16,14 +18,6 @@ import { cn } from '@/lib/utils'
 // rows and a large scrubber.
 
 const HEAT_BUCKETS = 64
-const MODALITIES: { key: StreamModality; label: string; color: string }[] = [
-  { key: 'text', label: 'text', color: '#60a5fa' },
-  { key: 'image', label: 'image', color: '#34d399' },
-  { key: 'audio', label: 'audio', color: '#fbbf24' },
-]
-const MODALITY_COLOR: Record<StreamModality, string> = {
-  text: '#60a5fa', image: '#34d399', audio: '#fbbf24',
-}
 
 // Chart.js area sparkline of event density for the collapsed bar. The
 // canvas mounts exactly once (project invariant: never remount a canvas
@@ -129,7 +123,7 @@ function DotRow({
         <span
           key={pct}
           className="absolute top-3 h-1.5 w-1.5 -translate-x-1/2 rounded-full opacity-85"
-          style={{ left: `${pct}%`, background: MODALITY_COLOR[leaf.modality] }}
+          style={{ left: `${pct}%`, background: MODALITY_COLORS[leaf.modality] }}
         />
       ))}
       <span className="absolute left-0.5 top-0 max-w-[70%] truncate text-[11px] leading-[30px] text-foreground/85 [text-shadow:0_0_4px_var(--color-background),0_0_4px_var(--color-background)]">
@@ -153,32 +147,33 @@ export function MobileTracker({ runId }: { runId: string }) {
   const runColor = useStore(s => s.runColors.get(runId)) ?? DEFAULT_RUN_COLOR
 
   const [open, setOpen] = useState(false)
-  const [activeModalities, setActiveModalities] = useState<Set<StreamModality>>(
-    () => new Set(MODALITIES.map(m => m.key)),
-  )
+  const { active: activeModalities, toggle: toggleModality } = useTagChips(STREAM_MODALITIES)
 
   const isStep = timeline.mode === 'step'
   const model = useStreams(runId, true)
   const loggableMetrics = useStore(s => s.runs.get(runId)?.loggableMetrics)
 
   const leaves = useMemo(
-    () => model.leaves.filter(l => activeModalities.has(l.modality)),
+    () =>
+      model.leaves
+        .filter(l => activeModalities.has(l.modality))
+        .sort((a, b) => a.path.localeCompare(b.path)),
     [model.leaves, activeModalities],
   )
 
   // Metric emissions count toward the overview's domain and density —
   // streams alone would leave a metrics-only run with an empty strip and
-  // a playhead that never tracks steps committed from the charts.
-  const metricPoints = useMemo(() => {
-    const pts: { step: number | null; timestamp: number }[] = []
+  // a playhead that never tracks steps committed from the charts. The
+  // series are iterated in place (no intermediate point array — they can
+  // hold tens of thousands of entries and this recomputes per batch).
+  const eachMetricPoint = (fn: (v: number | null) => void) => {
     for (const byName of Object.values(loggableMetrics ?? {})) {
       for (const series of Object.values(byName)) {
         if (series.type !== 'line' && series.type !== 'scatter') continue
-        for (const e of series.entries) pts.push({ step: e.step, timestamp: e.timestamp })
+        for (const e of series.entries) fn(isStep ? e.step : e.timestamp)
       }
     }
-    return pts
-  }, [loggableMetrics])
+  }
 
   const [min, max] = useMemo(() => {
     let lo = Infinity
@@ -192,18 +187,18 @@ export function MobileTracker({ runId }: { runId: string }) {
         hi = Math.max(hi, l.maxTime)
       }
     }
-    for (const p of metricPoints) {
-      const v = isStep ? p.step : p.timestamp
-      if (v == null) continue
+    eachMetricPoint(v => {
+      if (v == null) return
       if (v < lo) lo = v
       if (v > hi) hi = v
-    }
+    })
     if (lo === Infinity) {
       lo = 0
       hi = 0
     }
     return [lo, hi]
-  }, [leaves, metricPoints, isStep])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leaves, loggableMetrics, isStep])
   const range = max - min
 
   // Event-density buckets for the activity chart.
@@ -218,9 +213,10 @@ export function MobileTracker({ runId }: { runId: string }) {
     for (const l of leaves) {
       for (const d of l.datapoints) bump(isStep ? d.step : d.timestamp)
     }
-    for (const p of metricPoints) bump(isStep ? p.step : p.timestamp)
+    eachMetricPoint(bump)
     return counts
-  }, [leaves, metricPoints, isStep, min, range])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leaves, loggableMetrics, isStep, min, range])
 
   const playhead = isStep ? timeline.step : timeline.time
   const effective = playhead ?? max
@@ -288,7 +284,8 @@ export function MobileTracker({ runId }: { runId: string }) {
         </div>
       </div>
 
-      <MobileSheet open={open} onClose={() => setOpen(false)}>
+      {open && (
+      <MobileSheet onClose={() => setOpen(false)}>
         <div className="px-4 pb-6">
           <div className="mb-3 flex items-center justify-between">
             <div className="flex items-baseline gap-2.5">
@@ -305,46 +302,29 @@ export function MobileTracker({ runId }: { runId: string }) {
                 </button>
               )}
             </div>
-            <div className="flex rounded-lg bg-muted p-0.5">
-              {(['step', 'time'] as const).map(m => (
-                <button
-                  key={m}
-                  onClick={() => setMode(m)}
-                  className={cn(
-                    'rounded-md px-3 py-0.5 text-[11px] font-medium capitalize',
-                    timeline.mode === m ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground',
-                  )}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
+            <Segmented
+              options={[{ value: 'step', label: 'Step' }, { value: 'time', label: 'Time' }] as const}
+              value={timeline.mode}
+              onChange={setMode}
+            />
           </div>
 
           <div className="mb-3.5 flex gap-1.5">
-            {MODALITIES.map(m => {
-              const active = activeModalities.has(m.key)
+            {STREAM_MODALITIES.map(m => {
+              const active = activeModalities.has(m)
               return (
-                <button
-                  key={m.key}
-                  onClick={() =>
-                    setActiveModalities(prev => {
-                      const next = new Set(prev)
-                      if (next.has(m.key)) next.delete(m.key)
-                      else next.add(m.key)
-                      return next
-                    })
+                <Chip
+                  key={m}
+                  label={m}
+                  active={active}
+                  onTap={() => toggleModality(m)}
+                  leading={
+                    <span
+                      className="h-1.5 w-1.5 rounded-full"
+                      style={{ background: active ? MODALITY_COLORS[m] : 'var(--color-muted-foreground)' }}
+                    />
                   }
-                  className={cn(
-                    'flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-medium',
-                    active
-                      ? 'border-primary/40 bg-primary/10 text-foreground'
-                      : 'border-border text-muted-foreground',
-                  )}
-                >
-                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: active ? m.color : 'var(--color-muted-foreground)' }} />
-                  {m.label}
-                </button>
+                />
               )
             })}
           </div>
@@ -356,10 +336,7 @@ export function MobileTracker({ runId }: { runId: string }) {
           ) : (
             <>
               <div className="no-scrollbar mb-1.5 max-h-[32vh] overflow-y-auto">
-                {leaves
-                  .slice()
-                  .sort((a, b) => a.path.localeCompare(b.path))
-                  .map(leaf => (
+                {leaves.map(leaf => (
                     <DotRow
                       key={leaf.path}
                       leaf={leaf}
@@ -368,7 +345,7 @@ export function MobileTracker({ runId }: { runId: string }) {
                       range={range}
                       scrubPct={scrubPct}
                     />
-                  ))}
+                ))}
               </div>
 
               <input
@@ -406,6 +383,7 @@ export function MobileTracker({ runId }: { runId: string }) {
           )}
         </div>
       </MobileSheet>
+      )}
     </>
   )
 }

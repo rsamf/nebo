@@ -17,12 +17,12 @@ export function useLoggableHasContent(runId: string, loggableId: string): boolea
     const checkRun = (rid: string): boolean => {
       const r = runs.get(rid)
       if (!r) return false
-      if (r.logs?.some(l => l.node === loggableId)) return true
+      // O(1) checks first — the log scan is O(n) over a possibly huge array.
       const m = r.loggableMetrics?.[loggableId]
       if (m && Object.keys(m).length > 0) return true
       if ((r.loggableImages?.[loggableId]?.length ?? 0) > 0) return true
       if ((r.loggableAudio?.[loggableId]?.length ?? 0) > 0) return true
-      return false
+      return r.logs?.some(l => l.node === loggableId) ?? false
     }
 
     if (isComparison) return comparisonRunIds.some(checkRun)

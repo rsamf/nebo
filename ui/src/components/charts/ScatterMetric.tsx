@@ -46,8 +46,8 @@ export const ScatterMetric = memo(function ScatterMetric({
   const dpr = useChartDpr()
   const timelineMode = useStore(s => s.timeline.mode)
   const timelineStep = useStore(s => s.timeline.step)
-  const setTimelineMode = useStore(s => s.setTimelineMode)
   const setTimelineStep = useStore(s => s.setTimelineStep)
+  const selectTimelineStep = useStore(s => s.selectTimelineStep)
   const pointOpacity = useStore(s => s.settings.scatterPointOpacity)
   const pointSizeScale = useStore(s => s.settings.scatterPointSize)
   const theme = useStore(s => s.settings.theme)
@@ -166,10 +166,9 @@ export const ScatterMetric = memo(function ScatterMetric({
         setTimelineStep(null)
         return
       }
-      if (timelineMode !== 'step') setTimelineMode('step')
-      setTimelineStep(point.step)
+      selectTimelineStep(point.step)
     },
-    [timelineMode, timelineStep, setTimelineMode, setTimelineStep],
+    [timelineMode, timelineStep, selectTimelineStep, setTimelineStep],
   )
 
   const config: ChartConfiguration<'scatter'> = useMemo(

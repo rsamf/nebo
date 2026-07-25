@@ -10,6 +10,7 @@ import { MobileRunInfoSheet } from './MobileRunInfoSheet'
 import { MobileAlertsSheet } from './MobileAlertsSheet'
 import { MobileSettingsSheet } from './MobileSettingsSheet'
 import { shortId } from './util'
+import { MOBILE_ICON_BUTTON_CLASS } from './primitives'
 import { ArrowLeft, Bell, Settings } from 'lucide-react'
 
 // One run, full-screen: header (back / title → info sheet / bell /
@@ -48,7 +49,7 @@ export function MobileRunView({ runId }: { runId: string }) {
           <button
             onClick={() => (group ? selectGroup(group) : selectRun(null))}
             aria-label={group ? `Back to ${group}` : 'Back to runs'}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted"
+            className={`${MOBILE_ICON_BUTTON_CLASS} bg-muted`}
           >
             <ArrowLeft className="h-4 w-4" />
           </button>
@@ -67,14 +68,14 @@ export function MobileRunView({ runId }: { runId: string }) {
           <button
             onClick={() => setAlertsOpen(true)}
             aria-label="Alerts"
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground"
+            className={`${MOBILE_ICON_BUTTON_CLASS} text-muted-foreground`}
           >
             <Bell className="h-[18px] w-[18px]" />
           </button>
           <button
             onClick={() => setSettingsOpen(true)}
             aria-label="View settings"
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground"
+            className={`${MOBILE_ICON_BUTTON_CLASS} text-muted-foreground`}
           >
             <Settings className="h-[18px] w-[18px]" />
           </button>

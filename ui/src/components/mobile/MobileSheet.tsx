@@ -5,13 +5,13 @@ import { cn } from '@/lib/utils'
 // Bottom-sheet shell shared by every mobile overlay: dimmed backdrop
 // (tap to close), rounded top panel with a grab handle, safe-area
 // bottom padding. Content scrolls internally; the sheet itself is fixed.
+// Visibility is the parent's job — conditionally mount the sheet
+// (`{open && <MobileSheet …>}`), there is no `open` prop.
 export function MobileSheet({
-  open,
   onClose,
   heightClass,
   children,
 }: {
-  open: boolean
   onClose: () => void
   // Tailwind height class for the panel, e.g. 'h-[72vh]'. Omit to let
   // content size the sheet (capped at 85vh).
@@ -19,15 +19,12 @@ export function MobileSheet({
   children: React.ReactNode
 }) {
   useEffect(() => {
-    if (!open) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [open, onClose])
-
-  if (!open) return null
+  }, [onClose])
 
   return createPortal(
     <div className="fixed inset-0 z-50">

@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useStore } from '@/store'
-import { api } from '@/lib/api'
-import type { RunSummary } from '@/lib/api'
-import { childGroupsOf, membersOf } from '@/lib/runTree'
+import { useGroupDocs } from '@/hooks/useGroupDocs'
+import { childGroupsOf, membersOf, summariesById } from '@/lib/runTree'
 import { NeboMarkdown } from '@/components/shared/NeboMarkdown'
 import { MobileGroupCard, MobileRunCard } from './MobileRunList'
+import { MOBILE_ICON_BUTTON_CLASS } from './primitives'
 import { Badge } from '@/components/ui/badge'
 import { ArrowLeft, ChevronDown, ChevronRight, FileText } from 'lucide-react'
 
@@ -22,10 +22,7 @@ export function MobileGroupPage({ path }: { path: string }) {
   // naturally — the component unmounts.
   const docNames = runTree.groups[path]?.docs ?? []
 
-  const byId = useMemo(
-    () => new Map(Array.from(runs.values(), r => [r.summary.id, r.summary] as [string, RunSummary])),
-    [runs],
-  )
+  const byId = useMemo(() => summariesById(runs), [runs])
   const members = membersOf(runTree.runs, path, byId)
   const subgroups = childGroupsOf(runTree.groups, path)
   const exists = path in runTree.groups
@@ -42,7 +39,7 @@ export function MobileGroupPage({ path }: { path: string }) {
         <button
           onClick={() => selectGroup(parent)}
           aria-label={parent ? `Back to ${parent}` : 'Back to runs'}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted"
+          className={`${MOBILE_ICON_BUTTON_CLASS} bg-muted`}
         >
           <ArrowLeft className="h-4 w-4" />
         </button>
@@ -58,7 +55,7 @@ export function MobileGroupPage({ path }: { path: string }) {
           <button
             onClick={() => setNotesOpen(true)}
             aria-label={`Notes (${docNames.length})`}
-            className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground"
+            className={`relative ${MOBILE_ICON_BUTTON_CLASS} text-muted-foreground`}
           >
             <FileText className="h-[18px] w-[18px]" />
             <Badge className="absolute right-0 top-0 h-4 min-w-4 justify-center rounded-full px-1 py-0 text-[10px] leading-none tabular-nums">
@@ -99,31 +96,10 @@ function MobileGroupNotes({
   docNames: string[]
   onBack: () => void
 }) {
-  const [docs, setDocs] = useState<Record<string, string>>({})
+  const docs = useGroupDocs(path, docNames)
   const [collapsed, setCollapsed] = useState<Set<string>>(
     () => new Set(docNames.slice(1)),
   )
-
-  useEffect(() => {
-    let cancelled = false
-    Promise.all(
-      docNames.map(name =>
-        api
-          .getGroupDoc(path, name)
-          .then(content => [name, content] as const)
-          .catch(() => [name, null] as const),
-      ),
-    ).then(pairs => {
-      if (cancelled) return
-      const out: Record<string, string> = {}
-      for (const [name, content] of pairs) if (content != null) out[name] = content
-      setDocs(out)
-    })
-    return () => {
-      cancelled = true
-    }
-    // Re-fetch when the group or its doc set changes.
-  }, [path, docNames.join('|')])
 
   const toggle = (name: string) =>
     setCollapsed(prev => {
@@ -139,7 +115,7 @@ function MobileGroupNotes({
         <button
           onClick={onBack}
           aria-label="Back to group"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted"
+          className={`${MOBILE_ICON_BUTTON_CLASS} bg-muted`}
         >
           <ArrowLeft className="h-4 w-4" />
         </button>

@@ -1,8 +1,6 @@
 import { useMemo } from 'react'
 import type { AxisTransform } from '@/hooks/useAxisTransform'
-import type { FlatRow, StreamModality } from '@/lib/streams'
-
-const DOT_COLOR: Record<StreamModality, string> = { text: '#3b82f6', image: '#22c55e', audio: '#f97316' }
+import { MODALITY_COLORS as DOT_COLOR, type FlatRow } from '@/lib/streams'
 
 // Dedupe a row's datapoints by quantized x so DOM node count is bounded by
 // track width (~2.5px buckets at zoom 1), not by datapoint count. Bucket

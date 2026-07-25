@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dagre from '@dagrejs/dagre'
 import { useStore } from '@/store'
 import type { AudioEntry, ImageEntry } from '@/store'
@@ -14,10 +14,6 @@ import { firstSeriesFor, nearestAtStep } from './util'
 
 const NODE_W = 230
 const BASE_H = 58
-const METRIC_H = 42
-const IMAGE_H = 104
-const AUDIO_H = 44
-const LOGS_H = 34
 const PROGRESS_H = 15
 const MIN_SCALE = 0.3
 const MAX_SCALE = 2.5
@@ -33,10 +29,10 @@ type NodePreview =
   | null
 
 const PREVIEW_HEIGHT: Record<'image' | 'audio' | 'metric' | 'logs', number> = {
-  image: IMAGE_H,
-  audio: AUDIO_H,
-  metric: METRIC_H,
-  logs: LOGS_H,
+  image: 104,
+  audio: 44,
+  metric: 42,
+  logs: 34,
 }
 
 interface LaidNode {
@@ -58,7 +54,7 @@ export function MobileDagCanvas({
   runId: string
   onNodeTap: (loggableId: string) => void
 }) {
-  const run = useStore(s => s.runs).get(runId)
+  const run = useStore(s => s.runs.get(runId))
   const runColor = useStore(s => s.runColors.get(runId)) ?? DEFAULT_RUN_COLOR
   // Image/audio previews follow the playhead (null reads as step 0), so
   // scrubbing the tracker pages the DAG's media through the run.
@@ -66,36 +62,48 @@ export function MobileDagCanvas({
   const graph = run?.graph
   const loggableMetrics = run?.loggableMetrics
 
-  // Newest-first backwards scan — nodes with content resolve in a few
-  // iterations; only content-less nodes pay a full walk.
-  const lastLogLineFor = (id: string): string | null => {
-    const logs = run?.logs
-    if (!logs) return null
-    for (let i = logs.length - 1; i >= 0; i--) {
-      if (logs[i].node === id) return logs[i].message
-    }
-    return null
-  }
-
-  const previewFor = (id: string): NodePreview => {
-    const image = nearestAtStep(run?.loggableImages[id], timelineStep)
-    if (image) return { kind: 'image', image }
-    const audio = nearestAtStep(run?.loggableAudio[id], timelineStep)
-    if (audio) return { kind: 'audio', audio }
-    const series = firstSeriesFor(loggableMetrics, id)
-    if (series) return { kind: 'metric', series }
-    const line = lastLogLineFor(id)
-    if (line) return { kind: 'logs', line }
-    return null
-  }
-
-  // Recomputed every render, not memoized: the store mutates the run
-  // (and graph.nodes on progress ticks) in place, so no dependency array
-  // can key this correctly — and this component re-renders per store
-  // batch anyway via the s.runs map subscription. Dagre on a mobile-size
-  // graph is ~1 ms.
-  const layout = (() => {
+  // Keyed on the run object: every store mutation clones the run, so
+  // this recomputes exactly when this run (or the playhead) changes.
+  const layout = useMemo(() => {
     if (!graph || Object.keys(graph.nodes).length === 0) return null
+
+    // One backward walk over the (possibly 10k+) log array shared by all
+    // nodes that fall through to a log-line preview, instead of a scan
+    // per node.
+    const lastLogLines = new Map<string, string>()
+    const resolveLogLines = (ids: Set<string>) => {
+      const logs = run?.logs ?? []
+      for (let i = logs.length - 1; i >= 0 && ids.size > 0; i--) {
+        const node = logs[i].node
+        if (node && ids.has(node)) {
+          lastLogLines.set(node, logs[i].message)
+          ids.delete(node)
+        }
+      }
+    }
+    const needLogs = new Set<string>()
+    for (const id of Object.keys(graph.nodes)) {
+      if (
+        !run?.loggableImages[id]?.length &&
+        !run?.loggableAudio[id]?.length &&
+        !firstSeriesFor(loggableMetrics, id)
+      ) {
+        needLogs.add(id)
+      }
+    }
+    if (needLogs.size > 0) resolveLogLines(needLogs)
+
+    const previewFor = (id: string): NodePreview => {
+      const image = nearestAtStep(run?.loggableImages[id], timelineStep)
+      if (image) return { kind: 'image', image }
+      const audio = nearestAtStep(run?.loggableAudio[id], timelineStep)
+      if (audio) return { kind: 'audio', audio }
+      const series = firstSeriesFor(loggableMetrics, id)
+      if (series) return { kind: 'metric', series }
+      const line = lastLogLines.get(id)
+      if (line) return { kind: 'logs', line }
+      return null
+    }
     const g = new dagre.graphlib.Graph()
     g.setGraph({ rankdir: 'TB', nodesep: 28, ranksep: 52, marginx: 24, marginy: 24 })
     g.setDefaultEdgeLabel(() => ({}))
@@ -149,7 +157,9 @@ export function MobileDagCanvas({
       h = Math.max(h, n.y + n.height + 24)
     }
     return { nodes, edges, width: w, height: h }
-  })()
+    // graph/loggableMetrics are reachable from `run`; listed for clarity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run, timelineStep])
 
   // Pan/zoom via plain setState per pointer event — mobile graphs are
   // small enough that a React render per frame is fine.

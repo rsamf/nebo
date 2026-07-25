@@ -1,18 +1,16 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useStore } from '@/store'
-import { api } from '@/lib/api'
 import { MobileSheet } from './MobileSheet'
+import { Chip, LEVEL_FILTERS, type LevelFilter } from './primitives'
 import {
   ALERT_SEVERITY_COLOR, alertSeverity, loggableDisplayName, timeAgo,
 } from './util'
 import { ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-const SEVERITY_FILTERS = ['All', 'Info', 'Warn', 'Error'] as const
-type SeverityFilter = (typeof SEVERITY_FILTERS)[number]
-
-// Severity-filterable list of this run's fired alerts. Hydrated from
-// GET /runs/{id}/alerts on open; live alert events append via the store.
+// Severity-filterable list of this run's fired alerts. Hydrated with the
+// rest of the run's slices by useRunData; live alert events append via
+// the store's WS path.
 export function MobileAlertsSheet({
   runId,
   onClose,
@@ -22,25 +20,8 @@ export function MobileAlertsSheet({
   onClose: () => void
   onOpenNode: (loggableId: string) => void
 }) {
-  const run = useStore(s => s.runs).get(runId)
-  const setRunAlerts = useStore(s => s.setRunAlerts)
-  const [filter, setFilter] = useState<SeverityFilter>('All')
-  const [loaded, setLoaded] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-    api
-      .getRunAlerts(runId)
-      .then(d => {
-        if (cancelled) return
-        setRunAlerts(runId, d.alerts)
-        setLoaded(true)
-      })
-      .catch(() => setLoaded(true))
-    return () => {
-      cancelled = true
-    }
-  }, [runId, setRunAlerts])
+  const run = useStore(s => s.runs.get(runId))
+  const [filter, setFilter] = useState<LevelFilter>('All')
 
   const alerts = useMemo(() => {
     const all = run?.alerts ?? []
@@ -51,30 +32,19 @@ export function MobileAlertsSheet({
   }, [run?.alerts, filter])
 
   return (
-    <MobileSheet open onClose={onClose} heightClass="h-[66vh]">
+    <MobileSheet onClose={onClose} heightClass="h-[66vh]">
       <div className="flex shrink-0 items-center gap-2 px-4 pb-2.5">
         <span className="flex-1 text-base font-semibold">Alerts</span>
       </div>
       <div className="flex shrink-0 gap-1.5 px-4 pb-2.5">
-        {SEVERITY_FILTERS.map(f => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            className={cn(
-              'rounded-full border px-2.5 py-0.5 text-[10.5px] font-medium',
-              filter === f
-                ? 'border-primary/40 bg-primary/15 text-foreground'
-                : 'border-border text-muted-foreground',
-            )}
-          >
-            {f}
-          </button>
+        {LEVEL_FILTERS.map(f => (
+          <Chip key={f} label={f} active={filter === f} onTap={() => setFilter(f)} />
         ))}
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-4 pb-10">
         {alerts.length === 0 && (
           <div className="py-8 text-center text-xs text-muted-foreground">
-            {loaded ? 'No alerts fired on this run' : 'Loading…'}
+            No alerts fired on this run
           </div>
         )}
         {alerts.map((a, i) => {
