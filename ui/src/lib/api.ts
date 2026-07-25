@@ -184,6 +184,21 @@ export interface LabelsPayload {
   bitmasks?: LabelGroup<BitmaskEntry[]>[]
 }
 
+// A fired alert on a run: code-fired (`nb.alert`, triggered_by "code") or
+// rule-fired (CLI/MCP condition rules, triggered_by "cli").
+export interface AlertEntry {
+  title: string
+  text: string
+  level: number          // 10 debug / 20 info / 30 warn / 40 error
+  level_name: string
+  triggered_by: string
+  loggable_id: string | null
+  timestamp: number
+  condition?: string     // rule-fired only: display string of the condition
+  step?: number | null
+  value?: unknown
+}
+
 export interface NodeDetail {
   name: string
   func_name: string
@@ -231,6 +246,7 @@ export const api = {
   getRunMetrics: (id: string) => get<{ metrics: Record<string, Record<string, LoggableMetricSeries>> }>(`/runs/${id}/metrics`),
   getRunImages: (id: string) => get<{ images: Record<string, Array<{ node: string; media_id: string; name: string; step: number | null; timestamp: number; labels?: LabelsPayload | null }>> }>(`/runs/${id}/images`),
   getRunAudio: (id: string) => get<{ audio: Record<string, Array<{ node: string; media_id: string; name: string; sr: number; step: number | null; timestamp: number }>> }>(`/runs/${id}/audio`),
+  getRunAlerts: (id: string) => get<{ alerts: AlertEntry[] }>(`/runs/${id}/alerts`),
   // Media is served as raw immutable bytes (ETag = content-addressed
   // media_id), so <img>/<audio> reference the URL directly and the browser
   // cache does the rest. Tokens ride as a query param — media elements

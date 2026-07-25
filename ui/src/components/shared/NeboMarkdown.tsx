@@ -1,5 +1,6 @@
 import Markdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
+import remarkGfm from 'remark-gfm'
 import { useStore } from '@/store'
 
 // react-markdown v10 runs a default `urlTransform` that strips hrefs whose
@@ -21,7 +22,7 @@ export function NeboMarkdown({ children }: { children: string }) {
   const navigateNebo = useStore(s => s.navigateNebo)
   return (
     <Markdown
-      remarkPlugins={[remarkBreaks]}
+      remarkPlugins={[remarkGfm, remarkBreaks]}
       urlTransform={urlTransform}
       components={{
         a({ href, children }) {

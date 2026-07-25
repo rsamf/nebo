@@ -1881,6 +1881,16 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
             return JSONResponse(status_code=404, content={"error": f"Run '{run_id}' not found"})
         return {"audio": audio}
 
+    @app.get("/runs/{run_id}/alerts")
+    async def get_run_alerts(run_id: str):
+        """Fired alerts for one run — both code-fired (`nb.alert`) and
+        rule-fired (`triggered_by: "cli"`) entries, in firing order."""
+        await state.ensure_deep(run_id)
+        alerts = state.run_alerts(run_id)
+        if alerts is None:
+            return JSONResponse(status_code=404, content={"error": f"Run '{run_id}' not found"})
+        return {"alerts": alerts}
+
     @app.get("/runs/{run_id}/media/{media_id}")
     async def get_media(run_id: str, media_id: str, request: Request):
         await state.ensure_deep(run_id)

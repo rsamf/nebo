@@ -26,3 +26,16 @@ export function timeSince(date: Date): string {
   const diffMs = now - date.getTime()
   return formatDuration(diffMs)
 }
+
+/** React list key for a media entry. media_id alone is NOT unique —
+ *  it's content-addressed, so identical frames logged at different
+ *  steps share an id. Qualify by list position. */
+export function mediaEntryKey(entry: { mediaId: string }, index: number): string {
+  return `${entry.mediaId}:${index}`
+}
+
+/** Config value → display string (chips, run-info sheet). */
+export function formatConfigValue(v: unknown): string {
+  if (typeof v === 'object' && v !== null) return JSON.stringify(v)
+  return String(v)
+}

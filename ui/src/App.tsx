@@ -4,11 +4,10 @@ import { useIsDesktop } from '@/hooks/useMediaQuery'
 import { useStore } from '@/store'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { Sidebar } from '@/components/layout/Sidebar'
-import { MobileNav } from '@/components/layout/MobileNav'
+import { MobileApp } from '@/components/mobile/MobileApp'
 import { RunDetailView } from '@/components/layout/RunDetailView'
 import { GroupPage } from '@/components/layout/GroupPage'
 import { RightPanel } from '@/components/layout/RightPanel'
-import { RunList } from '@/components/runs/RunList'
 import { Notice } from '@/components/shared/Notice'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useEmbeddedView } from '@/hooks/useEmbeddedView'
@@ -94,18 +93,11 @@ export default function App() {
           )}
         </div>
       ) : (
-        /* Mobile: full-screen switching, tracker pinned at the bottom of detail */
-        <>
-          <MobileNav />
-          <div className="flex-1 overflow-hidden flex flex-col">
-            <ErrorBoundary label="MainContent">
-              {selectedGroup ? <GroupPage path={selectedGroup} /> : selectedRunId ? <RunDetailView /> : <RunList />}
-            </ErrorBoundary>
-          </div>
-          {selectedRunId && (
-            <ErrorBoundary label="Tracker"><Tracker runId={selectedRunId} /></ErrorBoundary>
-          )}
-        </>
+        /* Mobile: the dedicated touch experience (run list → run view
+           with DAG ⇄ Feed toggle, heat-strip tracker, bottom sheets). */
+        <div className="flex-1 overflow-hidden flex flex-col">
+          <MobileApp />
+        </div>
       )}
     </div>
     <ChartTooltip />

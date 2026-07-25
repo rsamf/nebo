@@ -43,7 +43,7 @@ export interface EmbeddedView {
 function parse(): EmbeddedView | null {
   if (typeof window === 'undefined') return null
   const params = new URLSearchParams(window.location.search)
-  const runId = params.get('run') ?? params.get('run_id')
+  const runId = params.get('run')
   if (!runId) return null
 
   const nodeRef = params.get('node')

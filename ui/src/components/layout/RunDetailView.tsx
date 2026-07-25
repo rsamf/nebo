@@ -72,7 +72,7 @@ export function RunDetailView() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Run header (desktop only - mobile uses MobileNav) */}
+      {/* Run header (desktop only - mobile has its own MobileRunView) */}
       {isDesktop && (
         <div className="border-b border-border shrink-0">
           <div className="flex items-center gap-3 px-4 py-2">

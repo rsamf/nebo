@@ -333,7 +333,9 @@ function Chip({
   )
 }
 
-function SingleRunChart({
+// Exported for the mobile feed, which renders charts without the
+// desktop MetricBlock chrome (header actions, chip rows).
+export function SingleRunChart({
   type,
   entries,
   color,

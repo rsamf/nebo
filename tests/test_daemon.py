@@ -805,6 +805,16 @@ def test_alert_event_is_appended_to_run():
     assert run.alerts[0]["level_name"] == "WARN"
     assert run.alerts[0]["loggable_id"] == "node_a"
 
+    # The per-run listing endpoint returns the same fired alerts.
+    resp = client.get("/runs/r_alert_1/alerts")
+    assert resp.status_code == 200
+    alerts = resp.json()["alerts"]
+    assert len(alerts) == 1
+    assert alerts[0]["title"] == "Loss went up"
+
+    resp = client.get("/runs/no_such_run/alerts")
+    assert resp.status_code == 404
+
 
 def test_alerts_wait_returns_alert():
     """Wait endpoint should unblock and return alert when one arrives at or above min_level."""

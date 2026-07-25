@@ -1,4 +1,5 @@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { formatConfigValue } from '@/lib/utils'
 
 interface ConfigChipsProps {
   params: Record<string, unknown>
@@ -24,9 +25,9 @@ export function ConfigChips({ params, className, maxVisible = 3 }: ConfigChipsPr
             <span
               key={k}
               className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground max-w-[140px] truncate"
-              title={`${k}: ${formatValue(v)}`}
+              title={`${k}: ${formatConfigValue(v)}`}
             >
-              {k}: {formatValue(v)}
+              {k}: {formatConfigValue(v)}
             </span>
           ))}
           {overflow > 0 && (
@@ -44,16 +45,11 @@ export function ConfigChips({ params, className, maxVisible = 3 }: ConfigChipsPr
           {entries.map(([k, v]) => (
             <div key={k} className="flex justify-between gap-3">
               <span className="text-muted-foreground shrink-0">{k}</span>
-              <span className="text-foreground break-all text-right">{formatValue(v)}</span>
+              <span className="text-foreground break-all text-right">{formatConfigValue(v)}</span>
             </div>
           ))}
         </div>
       </PopoverContent>
     </Popover>
   )
-}
-
-function formatValue(v: unknown): string {
-  if (typeof v === 'object' && v !== null) return JSON.stringify(v)
-  return String(v)
 }

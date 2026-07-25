@@ -7,15 +7,12 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { ChevronLeft, ChevronRight, Maximize, ChevronDown, ChevronUp, SlidersHorizontal } from 'lucide-react'
-import type { StreamModality } from '@/lib/streams'
+import { MODALITY_COLORS, STREAM_MODALITIES, type StreamModality } from '@/lib/streams'
 
-const MODALITY_COLORS: Record<StreamModality, string> = {
-  text: '#3b82f6', image: '#22c55e', audio: '#f97316',
-}
 const MODALITY_LABELS: Record<StreamModality, string> = {
   text: 'Text', image: 'Images', audio: 'Audio',
 }
-const MODALITIES: StreamModality[] = ['text', 'image', 'audio']
+const MODALITIES = STREAM_MODALITIES
 
 interface Props {
   minStep: number

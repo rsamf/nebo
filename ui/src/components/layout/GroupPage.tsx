@@ -1,8 +1,6 @@
-import { useEffect, useState } from 'react'
 import { useStore } from '@/store'
-import { api } from '@/lib/api'
-import type { RunSummary } from '@/lib/api'
-import { membersOf } from '@/lib/runTree'
+import { useGroupDocs } from '@/hooks/useGroupDocs'
+import { membersOf, summariesById } from '@/lib/runTree'
 import { RunCard } from '@/components/runs/RunCard'
 import { NeboMarkdown } from '@/components/shared/NeboMarkdown'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -19,33 +17,9 @@ export function GroupPage({ path }: { path: string }) {
 
   // docs are README-first as served by the daemon.
   const docNames = runTree.groups[path]?.docs ?? []
-  const [docs, setDocs] = useState<Record<string, string>>({})
+  const docs = useGroupDocs(path, docNames)
 
-  useEffect(() => {
-    let cancelled = false
-    Promise.all(
-      docNames.map(name =>
-        api
-          .getGroupDoc(path, name)
-          .then(content => [name, content] as const)
-          .catch(() => [name, null] as const),
-      ),
-    ).then(pairs => {
-      if (cancelled) return
-      const out: Record<string, string> = {}
-      for (const [name, content] of pairs) if (content != null) out[name] = content
-      setDocs(out)
-    })
-    return () => {
-      cancelled = true
-    }
-    // Re-fetch when the group or its doc set changes.
-  }, [path, docNames.join('|')])
-
-  const byId = new Map(
-    Array.from(runs.values(), r => [r.summary.id, r.summary] as [string, RunSummary]),
-  )
-  const members = membersOf(runTree.runs, path, byId)
+  const members = membersOf(runTree.runs, path, summariesById(runs))
 
   const exists = path in runTree.groups
 
