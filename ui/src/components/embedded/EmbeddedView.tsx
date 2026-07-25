@@ -14,6 +14,10 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { DEFAULT_RUN_COLOR } from '@/lib/colors'
 import { Tracker } from '@/components/timeline/Tracker'
 
+// Media galleries cap at the most recent N entries — embeds live in
+// iframes and must stay light even against 10k-step runs.
+const MAX_EMBED_MEDIA_ITEMS = 200
+
 /**
  * Top-level dispatcher for `?view=<kind>&run=<id>...` URLs. Renders only the
  * requested slice of a run with no sidebar / app header — designed for
@@ -204,7 +208,7 @@ function EmbeddedImages({ spec }: { spec: EmbeddedSpec }) {
   const graph = useStore(s => s.runs.get(spec.runId)?.graph)
   const filterNodeId = resolveNodeRef(spec.nodeRef, graph?.nodes)
 
-  const items = useMemo(() => {
+  const { items, total } = useMemo(() => {
     const out: { loggableId: string; img: typeof allImages[string][number] }[] = []
     for (const [lid, list] of Object.entries(allImages)) {
       if (filterNodeId && lid !== filterNodeId) continue
@@ -213,17 +217,27 @@ function EmbeddedImages({ spec }: { spec: EmbeddedSpec }) {
         out.push({ loggableId: lid, img })
       }
     }
-    return out
+    // A repeated name is a time series (one emission per step) — cap the
+    // embed at the most recent entries so a 10k-step run doesn't mount
+    // thousands of <img> elements in an iframe.
+    return { items: out.slice(-MAX_EMBED_MEDIA_ITEMS), total: out.length }
   }, [allImages, filterNodeId, spec.name])
 
   return (
     <ScrollArea className="h-screen">
       <div className="p-3 space-y-3">
+        {total > items.length && (
+          <p className="text-xs text-muted-foreground">
+            Showing the latest {items.length} of {total} images
+          </p>
+        )}
         {items.length === 0 ? (
           <p className="text-xs text-muted-foreground">No images</p>
         ) : (
-          items.map(({ loggableId, img }) => (
-            <ImageItem key={img.mediaId} runId={spec.runId} loggableId={loggableId} img={img} showTimestamp />
+          items.map(({ loggableId, img }, i) => (
+            // mediaId is content-addressed, so identical frames logged at
+            // different steps share an id — qualify the key by position.
+            <ImageItem key={`${img.mediaId}:${i}`} runId={spec.runId} loggableId={loggableId} img={img} showTimestamp />
           ))
         )}
       </div>
@@ -237,7 +251,7 @@ function EmbeddedAudio({ spec }: { spec: EmbeddedSpec }) {
   const graph = useStore(s => s.runs.get(spec.runId)?.graph)
   const filterNodeId = resolveNodeRef(spec.nodeRef, graph?.nodes)
 
-  const items = useMemo(() => {
+  const { items, total } = useMemo(() => {
     const out: { loggableId: string; entry: typeof allAudio[string][number] }[] = []
     for (const [lid, list] of Object.entries(allAudio)) {
       if (filterNodeId && lid !== filterNodeId) continue
@@ -246,17 +260,22 @@ function EmbeddedAudio({ spec }: { spec: EmbeddedSpec }) {
         out.push({ loggableId: lid, entry })
       }
     }
-    return out
+    return { items: out.slice(-MAX_EMBED_MEDIA_ITEMS), total: out.length }
   }, [allAudio, filterNodeId, spec.name])
 
   return (
     <ScrollArea className="h-screen">
       <div className="p-3 space-y-3">
+        {total > items.length && (
+          <p className="text-xs text-muted-foreground">
+            Showing the latest {items.length} of {total} clips
+          </p>
+        )}
         {items.length === 0 ? (
           <p className="text-xs text-muted-foreground">No audio</p>
         ) : (
-          items.map(({ loggableId, entry }) => (
-            <AudioItem key={entry.mediaId} runId={spec.runId} entry={entry} showTimestamp />
+          items.map(({ entry }, i) => (
+            <AudioItem key={`${entry.mediaId}:${i}`} runId={spec.runId} entry={entry} showTimestamp />
           ))
         )}
         {/* loggableId currently unused in AudioItem, but we capture it so we
