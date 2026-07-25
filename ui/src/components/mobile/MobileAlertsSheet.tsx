@@ -54,7 +54,6 @@ export function MobileAlertsSheet({
     <MobileSheet open onClose={onClose} heightClass="h-[66vh]">
       <div className="flex shrink-0 items-center gap-2 px-4 pb-2.5">
         <span className="flex-1 text-base font-semibold">Alerts</span>
-        <span className="text-xs text-muted-foreground">this run</span>
       </div>
       <div className="flex shrink-0 gap-1.5 px-4 pb-2.5">
         {SEVERITY_FILTERS.map(f => (

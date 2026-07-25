@@ -1,6 +1,12 @@
 // Shared helpers for the mobile experience.
 import type { RunState } from '@/store'
-import type { MetricEntry } from '@/lib/api'
+import type { MetricEntry, MetricType } from '@/lib/api'
+
+// One card recipe for every tappable row on the mobile list screens
+// (runs, groups, the group page's Notes button) — identical fixed height
+// so mixed lists read as one rhythm.
+export const MOBILE_CARD_CLASS =
+  'mb-2 flex h-16 w-full items-center gap-3 rounded-xl border border-border bg-card px-3.5 text-left'
 
 /** Shortened run id for compact metadata rows. */
 export function shortId(id: string): string {
@@ -43,12 +49,17 @@ export function firstLineSeriesValues(
   return null
 }
 
-/** Same, scoped to one loggable — the DAG node card preview. */
-export function loggableLineSeriesValues(
-  loggableMetrics: RunState['loggableMetrics'] | undefined, loggableId: string, max = 80,
-): number[] | null {
+/** A loggable's first metric series of any chart type — the DAG node
+ *  card preview (rendered via MetricPreview). */
+export function firstSeriesFor(
+  loggableMetrics: RunState['loggableMetrics'] | undefined, loggableId: string,
+): { type: MetricType; entries: MetricEntry[] } | null {
   const byName = loggableMetrics?.[loggableId]
-  return byName ? lineValuesIn(byName, max) : null
+  if (!byName) return null
+  for (const series of Object.values(byName)) {
+    if (series.entries.length > 0) return series
+  }
+  return null
 }
 
 function lineValuesIn(
@@ -63,6 +74,28 @@ function lineValuesIn(
     if (values.length >= 2) return values
   }
   return null
+}
+
+/** The entry at (or nearest below) the current playhead step. Stepless
+ *  entries count as step 0; a null playhead also means step 0 — the DAG
+ *  preview convention. Falls back to the earliest entry when everything
+ *  is past the target. */
+export function nearestAtStep<T extends { step: number | null }>(
+  entries: T[] | undefined,
+  step: number | null,
+): T | null {
+  if (!entries || entries.length === 0) return null
+  const target = step ?? 0
+  let best: T | null = null
+  let bestStep = -Infinity
+  for (const e of entries) {
+    const s = e.step ?? 0
+    if (s <= target && s >= bestStep) {
+      best = e
+      bestStep = s
+    }
+  }
+  return best ?? entries[0]
 }
 
 /** Latest displayable value for a metric series, used on feed cards. */
@@ -124,9 +157,3 @@ export function loggableDisplayName(run: RunState | undefined, loggableId: strin
   return loggableId
 }
 
-/** Compress a group path for a drill card: "a/…/z" past two segments. */
-export function compressPath(path: string): string {
-  const parts = path.split('/')
-  if (parts.length <= 2) return path
-  return `${parts[0]}/…/${parts[parts.length - 1]}`
-}

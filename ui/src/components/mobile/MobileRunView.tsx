@@ -10,7 +10,7 @@ import { MobileRunInfoSheet } from './MobileRunInfoSheet'
 import { MobileAlertsSheet } from './MobileAlertsSheet'
 import { MobileSettingsSheet } from './MobileSettingsSheet'
 import { shortId } from './util'
-import { ArrowLeft, Bell, ChevronDown, Settings } from 'lucide-react'
+import { ArrowLeft, Bell, Settings } from 'lucide-react'
 
 // One run, full-screen: header (back / title → info sheet / bell /
 // gear), DAG or Feed body (toggled from the tracker bar), persistent
@@ -43,45 +43,26 @@ export function MobileRunView({ runId }: { runId: string }) {
     <div className="flex h-full flex-col">
       <div className="shrink-0 border-b border-border">
         <div className="flex items-center gap-2.5 px-3 pb-2.5 pt-3">
+          {/* Back mirrors the hierarchy: a grouped run returns to its
+              parent group's page, a root run to the run list. */}
           <button
-            onClick={() => selectRun(null)}
-            aria-label="Back to runs"
+            onClick={() => (group ? selectGroup(group) : selectRun(null))}
+            aria-label={group ? `Back to ${group}` : 'Back to runs'}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted"
           >
             <ArrowLeft className="h-4 w-4" />
           </button>
           <button
             onClick={() => setInfoOpen(true)}
-            className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+            className="min-w-0 flex-1 text-left"
           >
-            <div className="min-w-0">
-              <div className="truncate text-[15px] font-semibold">
-                {group && (
-                  <span
-                    role="link"
-                    tabIndex={0}
-                    onClick={e => {
-                      e.stopPropagation()
-                      selectGroup(group)
-                    }}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter') {
-                        e.stopPropagation()
-                        selectGroup(group)
-                      }
-                    }}
-                    className="font-medium text-muted-foreground"
-                  >
-                    {group.split('/').pop()} /{' '}
-                  </span>
-                )}
-                {name}
-              </div>
-              <div className="truncate font-mono text-[11px] text-muted-foreground">
-                {shortId(run.summary.id)}
-              </div>
+            {group && (
+              <div className="truncate text-[11px] font-medium text-muted-foreground">{group}</div>
+            )}
+            <div className="truncate text-[15px] font-semibold leading-tight">{name}</div>
+            <div className="truncate font-mono text-[11px] text-muted-foreground">
+              {shortId(run.summary.id)}
             </div>
-            <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
           </button>
           <button
             onClick={() => setAlertsOpen(true)}

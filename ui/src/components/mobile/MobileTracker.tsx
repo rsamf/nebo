@@ -1,17 +1,21 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Chart } from 'chart.js'
 import { useStore } from '@/store'
 import { useStreams } from '@/hooks/useStreams'
+import { DEFAULT_RUN_COLOR } from '@/lib/colors'
+import { withAlpha } from '@/components/charts/withAlpha'
 import type { StreamLeaf, StreamModality } from '@/lib/streams'
 import { MobileSheet } from './MobileSheet'
 import { elapsedLabel } from './util'
 import { ChevronLeft, ChevronRight, ChevronUp, GitBranch, Rows3 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-// Persistent bottom tracker: a heat-strip of event density with the
-// DAG ⇄ Feed view toggle in the collapsed bar; tapping the strip expands
-// a sheet with per-stream dot rows and a large scrubber.
+// Persistent bottom tracker: an event-activity overview (Chart.js area
+// sparkline in the run color) with the DAG ⇄ Feed view toggle in the
+// collapsed bar; tapping the strip expands a sheet with per-stream dot
+// rows and a large scrubber.
 
-const HEAT_BUCKETS = 48
+const HEAT_BUCKETS = 64
 const MODALITIES: { key: StreamModality; label: string; color: string }[] = [
   { key: 'text', label: 'text', color: '#60a5fa' },
   { key: 'image', label: 'image', color: '#34d399' },
@@ -19,6 +23,74 @@ const MODALITIES: { key: StreamModality; label: string; color: string }[] = [
 ]
 const MODALITY_COLOR: Record<StreamModality, string> = {
   text: '#60a5fa', image: '#34d399', audio: '#fbbf24',
+}
+
+// Chart.js area sparkline of event density for the collapsed bar. The
+// canvas mounts exactly once (project invariant: never remount a canvas
+// under a live Chart instance) and data flows in via chart.update().
+function ActivityChart({ counts, color }: { counts: number[]; color: string }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const chartRef = useRef<Chart<'line', number[], number> | null>(null)
+
+  // sqrt-compress so a single dense burst doesn't flatten the rest.
+  const data = useMemo(() => counts.map(c => Math.sqrt(c)), [counts])
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const chart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: data.map((_, i) => i),
+        datasets: [{
+          data,
+          borderColor: color,
+          backgroundColor: withAlpha(color, 0.18),
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: true,
+          tension: 0.35,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        events: [],
+        plugins: { tooltip: { enabled: false }, legend: { display: false } },
+        scales: {
+          x: { display: false },
+          // Headroom above the peak so uniform activity draws as a line
+          // with air over it instead of a solid block.
+          y: { display: false, beginAtZero: true, suggestedMax: Math.max(1, ...data) * 1.4 },
+        },
+        layout: { padding: 0 },
+      },
+    })
+    chartRef.current = chart
+    return () => {
+      chart.destroy()
+      chartRef.current = null
+    }
+    // Mount-once by design; data and color updates flow through the
+    // effects below without touching the canvas.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    chart.data.labels = data.map((_, i) => i)
+    chart.data.datasets[0].data = data
+    chart.data.datasets[0].borderColor = color
+    chart.data.datasets[0].backgroundColor = withAlpha(color, 0.18)
+    if (chart.options.scales?.y) {
+      chart.options.scales.y.suggestedMax = Math.max(1, ...data) * 1.4
+    }
+    chart.update('none')
+  }, [data, color])
+
+  return <canvas ref={canvasRef} className="pointer-events-none" />
 }
 
 function DotRow({
@@ -78,6 +150,7 @@ export function MobileTracker({ runId }: { runId: string }) {
   const setMode = useStore(s => s.setTimelineMode)
   const viewMode = useStore(s => s.viewMode)
   const setViewMode = useStore(s => s.setViewMode)
+  const runColor = useStore(s => s.runColors.get(runId)) ?? DEFAULT_RUN_COLOR
 
   const [open, setOpen] = useState(false)
   const [activeModalities, setActiveModalities] = useState<Set<StreamModality>>(
@@ -86,11 +159,26 @@ export function MobileTracker({ runId }: { runId: string }) {
 
   const isStep = timeline.mode === 'step'
   const model = useStreams(runId, true)
+  const loggableMetrics = useStore(s => s.runs.get(runId)?.loggableMetrics)
 
   const leaves = useMemo(
     () => model.leaves.filter(l => activeModalities.has(l.modality)),
     [model.leaves, activeModalities],
   )
+
+  // Metric emissions count toward the overview's domain and density —
+  // streams alone would leave a metrics-only run with an empty strip and
+  // a playhead that never tracks steps committed from the charts.
+  const metricPoints = useMemo(() => {
+    const pts: { step: number | null; timestamp: number }[] = []
+    for (const byName of Object.values(loggableMetrics ?? {})) {
+      for (const series of Object.values(byName)) {
+        if (series.type !== 'line' && series.type !== 'scatter') continue
+        for (const e of series.entries) pts.push({ step: e.step, timestamp: e.timestamp })
+      }
+    }
+    return pts
+  }, [loggableMetrics])
 
   const [min, max] = useMemo(() => {
     let lo = Infinity
@@ -104,39 +192,41 @@ export function MobileTracker({ runId }: { runId: string }) {
         hi = Math.max(hi, l.maxTime)
       }
     }
+    for (const p of metricPoints) {
+      const v = isStep ? p.step : p.timestamp
+      if (v == null) continue
+      if (v < lo) lo = v
+      if (v > hi) hi = v
+    }
     if (lo === Infinity) {
       lo = 0
       hi = 0
     }
     return [lo, hi]
-  }, [leaves, isStep])
+  }, [leaves, metricPoints, isStep])
   const range = max - min
 
-  // Event-density buckets for the heat strip.
+  // Event-density buckets for the activity chart.
   const heat = useMemo(() => {
     const counts = new Array<number>(HEAT_BUCKETS).fill(0)
     if (range <= 0) return counts
-    for (const l of leaves) {
-      for (const d of l.datapoints) {
-        const v = isStep ? d.step : d.timestamp
-        if (v == null) continue
-        const idx = Math.min(HEAT_BUCKETS - 1, Math.max(0, Math.floor(((v - min) / range) * HEAT_BUCKETS)))
-        counts[idx]++
-      }
+    const bump = (v: number | null) => {
+      if (v == null) return
+      const idx = Math.min(HEAT_BUCKETS - 1, Math.max(0, Math.floor(((v - min) / range) * HEAT_BUCKETS)))
+      counts[idx]++
     }
+    for (const l of leaves) {
+      for (const d of l.datapoints) bump(isStep ? d.step : d.timestamp)
+    }
+    for (const p of metricPoints) bump(isStep ? p.step : p.timestamp)
     return counts
-  }, [leaves, isStep, min, range])
-  const maxCount = Math.max(1, ...heat)
+  }, [leaves, metricPoints, isStep, min, range])
 
   const playhead = isStep ? timeline.step : timeline.time
   const effective = playhead ?? max
   const scrubPct = range > 0 ? Math.max(0, Math.min(100, ((effective - min) / range) * 100)) : 100
 
-  const posLabel = range <= 0
-    ? '—'
-    : isStep
-      ? `step ${Math.round(effective)}`
-      : `+${elapsedLabel(effective - min)}`
+  const posLabel = isStep ? `step ${Math.round(effective)}` : `+${elapsedLabel(effective - min)}`
 
   const commit = (v: number) => {
     if (isStep) setStep(Math.round(v))
@@ -181,25 +271,18 @@ export function MobileTracker({ runId }: { runId: string }) {
             className="flex min-w-0 flex-1 items-center gap-2.5 py-1.5"
             aria-label="Open timeline"
           >
-            <div className="relative flex h-3.5 flex-1 items-end gap-px">
-              {heat.map((c, i) => (
-                <span
-                  key={i}
-                  className="flex-1 rounded-[1px] bg-primary"
-                  style={{
-                    height: `${c === 0 ? 8 : 20 + Math.sqrt(c / maxCount) * 80}%`,
-                    opacity: c === 0 ? 0.12 : 0.3 + 0.7 * Math.sqrt(c / maxCount),
-                  }}
-                />
-              ))}
+            <div className="relative h-5 min-w-0 flex-1">
+              <ActivityChart counts={heat} color={runColor} />
               <span
-                className="absolute -bottom-0.5 -top-0.5 w-0.5 -translate-x-1/2 rounded bg-foreground"
+                className="absolute inset-y-0 w-px -translate-x-1/2 bg-foreground/50"
                 style={{ left: `${scrubPct}%` }}
               />
             </div>
-            <span className={cn('shrink-0 text-[11px] tabular-nums', filtering ? 'text-foreground' : 'text-muted-foreground')}>
-              {posLabel}
-            </span>
+            {range > 0 && (
+              <span className={cn('shrink-0 text-[11px] tabular-nums', filtering ? 'text-foreground' : 'text-muted-foreground')}>
+                {posLabel}
+              </span>
+            )}
             <ChevronUp className="h-3 w-3 shrink-0 text-muted-foreground" />
           </button>
         </div>

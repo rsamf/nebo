@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import dagre from '@dagrejs/dagre'
 import { useStore } from '@/store'
+import type { AudioEntry, ImageEntry } from '@/store'
+import { api, type LoggableMetricSeries } from '@/lib/api'
 import { DEFAULT_RUN_COLOR } from '@/lib/colors'
-import { Sparkline } from './Sparkline'
-import { loggableLineSeriesValues } from './util'
+import { MetricPreview } from './MetricPreview'
+import { firstSeriesFor, nearestAtStep } from './util'
 
 // Touch-first DAG canvas: dagre layout, one-finger pan, two-finger
 // pinch zoom, +/− buttons, tap a node for its detail sheet. Deliberately
@@ -12,12 +14,30 @@ import { loggableLineSeriesValues } from './util'
 
 const NODE_W = 230
 const BASE_H = 58
-const SPARK_H = 40
+const METRIC_H = 42
+const IMAGE_H = 104
+const AUDIO_H = 44
+const LOGS_H = 34
 const PROGRESS_H = 15
 const MIN_SCALE = 0.3
 const MAX_SCALE = 2.5
 // Movement beyond this many px means the gesture was a pan, not a tap.
 const TAP_SLOP_PX = 8
+
+// One preview per node, first available in this order.
+type NodePreview =
+  | { kind: 'image'; image: ImageEntry }
+  | { kind: 'audio'; audio: AudioEntry }
+  | { kind: 'metric'; series: LoggableMetricSeries }
+  | { kind: 'logs'; line: string }
+  | null
+
+const PREVIEW_HEIGHT: Record<'image' | 'audio' | 'metric' | 'logs', number> = {
+  image: IMAGE_H,
+  audio: AUDIO_H,
+  metric: METRIC_H,
+  logs: LOGS_H,
+}
 
 interface LaidNode {
   id: string
@@ -27,7 +47,7 @@ interface LaidNode {
   name: string
   sub: string
   exec: number
-  spark: number[] | null
+  preview: NodePreview
   progress: { current: number; total: number } | null
 }
 
@@ -40,8 +60,34 @@ export function MobileDagCanvas({
 }) {
   const run = useStore(s => s.runs).get(runId)
   const runColor = useStore(s => s.runColors.get(runId)) ?? DEFAULT_RUN_COLOR
+  // Image/audio previews follow the playhead (null reads as step 0), so
+  // scrubbing the tracker pages the DAG's media through the run.
+  const timelineStep = useStore(s => s.timeline.step)
   const graph = run?.graph
   const loggableMetrics = run?.loggableMetrics
+
+  // Newest-first backwards scan — nodes with content resolve in a few
+  // iterations; only content-less nodes pay a full walk.
+  const lastLogLineFor = (id: string): string | null => {
+    const logs = run?.logs
+    if (!logs) return null
+    for (let i = logs.length - 1; i >= 0; i--) {
+      if (logs[i].node === id) return logs[i].message
+    }
+    return null
+  }
+
+  const previewFor = (id: string): NodePreview => {
+    const image = nearestAtStep(run?.loggableImages[id], timelineStep)
+    if (image) return { kind: 'image', image }
+    const audio = nearestAtStep(run?.loggableAudio[id], timelineStep)
+    if (audio) return { kind: 'audio', audio }
+    const series = firstSeriesFor(loggableMetrics, id)
+    if (series) return { kind: 'metric', series }
+    const line = lastLogLineFor(id)
+    if (line) return { kind: 'logs', line }
+    return null
+  }
 
   // Recomputed every render, not memoized: the store mutates the run
   // (and graph.nodes on progress ticks) in place, so no dependency array
@@ -55,19 +101,22 @@ export function MobileDagCanvas({
     g.setDefaultEdgeLabel(() => ({}))
     const metas: Record<string, Omit<LaidNode, 'x' | 'y'>> = {}
     for (const [id, n] of Object.entries(graph.nodes)) {
-      const spark = loggableLineSeriesValues(loggableMetrics, id, 60)
+      const preview = previewFor(id)
       const progress =
         n.progress && n.progress.total > 0 && n.progress.current < n.progress.total
           ? { current: n.progress.current, total: n.progress.total }
           : null
-      const height = BASE_H + (spark ? SPARK_H : 0) + (progress ? PROGRESS_H : 0)
+      const height =
+        BASE_H +
+        (preview ? PREVIEW_HEIGHT[preview.kind] : 0) +
+        (progress ? PROGRESS_H : 0)
       metas[id] = {
         id,
         height,
         name: n.name,
         sub: n.docstring?.split('\n')[0] || n.func_name || id,
         exec: n.exec_count,
-        spark,
+        preview,
         progress,
       }
       g.setNode(id, { width: NODE_W, height })
@@ -253,8 +302,45 @@ export function MobileDagCanvas({
               <span className="shrink-0 text-[11px] text-muted-foreground">×{n.exec}</span>
             </div>
             <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{n.sub}</div>
-            {n.spark && (
-              <Sparkline values={n.spark} color={runColor} width={NODE_W - 30} height={34} strokeWidth={1.4} className="mt-2" />
+            {n.preview?.kind === 'image' && (
+              <div className="relative mt-2">
+                <img
+                  key={n.preview.image.mediaId}
+                  src={api.mediaUrl(runId, n.preview.image.mediaId)}
+                  alt={n.preview.image.name}
+                  loading="lazy"
+                  className="h-24 w-full rounded-lg border border-border object-cover"
+                />
+                {n.preview.image.step != null && (
+                  <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1 font-mono text-[9px] text-white">
+                    s{n.preview.image.step}
+                  </span>
+                )}
+              </div>
+            )}
+            {n.preview?.kind === 'audio' && (
+              <div className="mt-2" onClick={e => e.stopPropagation()}>
+                <audio
+                  controls
+                  preload="none"
+                  src={api.mediaUrl(runId, n.preview.audio.mediaId)}
+                  className="h-9 w-full"
+                />
+              </div>
+            )}
+            {n.preview?.kind === 'metric' && (
+              <MetricPreview
+                series={n.preview.series}
+                color={runColor}
+                width={NODE_W - 30}
+                height={34}
+                className="mt-2"
+              />
+            )}
+            {n.preview?.kind === 'logs' && (
+              <div className="mt-2 line-clamp-2 font-mono text-[10px] leading-snug text-muted-foreground">
+                {n.preview.line}
+              </div>
             )}
             {n.progress && (
               <div className="mt-2 h-[5px] overflow-hidden rounded-full bg-muted">

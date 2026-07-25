@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -109,6 +110,21 @@
   ::-webkit-scrollbar-corner {
     background: transparent;
   }
+}
+
+/* Markdown inline code: the typography plugin injects literal backtick
+   pseudo-elements around <code>, which reads as "backticks not
+   rendering". Drop them and use a chip treatment instead — applies to
+   every prose surface (group notes, run notes, desktop group pages). */
+.prose code::before,
+.prose code::after {
+  content: none;
+}
+.prose :not(pre) > code {
+  background-color: var(--color-muted);
+  border-radius: 0.3rem;
+  padding: 0.125rem 0.3rem;
+  font-weight: 500;
 }
 
 /* Hidden scrollbar for horizontal chip rails / thumb strips (mobile). */

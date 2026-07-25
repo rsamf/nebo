@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useStore } from '@/store'
 import type { AudioEntry, ImageEntry } from '@/store'
 import { api, type LogEntry, type LoggableMetricSeries } from '@/lib/api'
@@ -8,7 +8,8 @@ import { SingleRunChart } from '@/components/node-tabs/NodeMetrics'
 import { scatterLabels } from '@/components/charts/scatterShape'
 import { ImageWithLabels } from '@/components/shared/ImageWithLabels'
 import { Modal } from '@/components/ui/modal'
-import { Sparkline } from './Sparkline'
+import { LongPressChartGate } from './LongPressChartGate'
+import { MetricPreview } from './MetricPreview'
 import { latestMetricLabel, loggableDisplayName } from './util'
 import { cn } from '@/lib/utils'
 
@@ -57,8 +58,11 @@ export function MobileFeed({ runId }: { runId: string }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-b border-border px-4">
-        <div className="no-scrollbar flex gap-2 overflow-x-auto pb-2.5 pt-3">
+      {/* No horizontal padding on this wrapper — the chip rail must clip
+          at the device edge and scroll under it; the inset lives inside
+          the scroller (rail px-4) and on the non-scrolling row (mx-4). */}
+      <div className="shrink-0 border-b border-border">
+        <div className="no-scrollbar flex gap-2 overflow-x-auto px-4 pb-2.5 pt-3">
           <StageChip label="All" active={stage === null} onTap={() => setStage(null)} />
           {stages.map(id => (
             <StageChip
@@ -69,7 +73,7 @@ export function MobileFeed({ runId }: { runId: string }) {
             />
           ))}
         </div>
-        <div className="mb-2.5 flex gap-0.5 rounded-[9px] bg-muted p-0.5">
+        <div className="mx-4 mb-2.5 flex gap-0.5 rounded-[9px] bg-muted p-0.5">
           {TYPE_FILTERS.map(f => (
             <button
               key={f.key}
@@ -215,14 +219,10 @@ function MetricFeedCard({
   color: string
 }) {
   const [expanded, setExpanded] = useState(false)
-  const spark = useMemo(() => {
-    if (series.type !== 'line') return null
-    const values = series.entries
-      .slice(-80)
-      .map(e => (typeof e.value === 'number' ? e.value : NaN))
-      .filter(v => Number.isFinite(v))
-    return values.length >= 2 ? values : null
-  }, [series.type, series.entries])
+  const lineSmoothing = useStore(s => s.settings.lineSmoothing ?? 0)
+  const setTimelineMode = useStore(s => s.setTimelineMode)
+  const setTimelineStep = useStore(s => s.setTimelineStep)
+
   const allLabels = useMemo(
     () =>
       series.type === 'scatter' || series.type === 'histogram'
@@ -232,21 +232,43 @@ function MetricFeedCard({
   )
   const activeLabels = useMemo(() => new Set(allLabels), [allLabels])
 
+  // While a long-pressed line chart is focused, the step filter follows
+  // the finger — the touch replacement for LineMetric's built-in click
+  // handler, which the gate's pointer-events:none canvas never receives.
+  // Reads the live timeline to skip no-op sets: this fires per animation
+  // frame during a scrub.
+  const scrubStep = useCallback(
+    (x: number) => {
+      const rounded = Math.round(x)
+      const t = useStore.getState().timeline
+      if (t.mode !== 'step') setTimelineMode('step')
+      if (t.step !== rounded) setTimelineStep(rounded)
+    },
+    [setTimelineMode, setTimelineStep],
+  )
+
   return (
     <div className="rounded-xl border border-border bg-card px-3.5 py-3">
       <button onClick={() => setExpanded(e => !e)} className="flex min-h-[30px] w-full items-center gap-3 text-left">
         <div className="min-w-0 flex-1">
           <div className="text-[13.5px] font-medium">{name}</div>
-          <div className="text-[11px] text-muted-foreground">{nodeLabel} · {series.type}</div>
+          <div className="text-[11px] text-muted-foreground">{nodeLabel}</div>
         </div>
-        <div className="shrink-0 text-[15px] font-semibold tabular-nums">{latestMetricLabel(series)}</div>
-        {!expanded && spark && <Sparkline values={spark} color={color} width={88} height={26} className="shrink-0" />}
+        {series.type === 'line' && (
+          <div className="shrink-0 text-[15px] font-semibold tabular-nums">{latestMetricLabel(series)}</div>
+        )}
+        {!expanded && (
+          <MetricPreview series={series} color={color} smoothing={lineSmoothing} className="shrink-0" />
+        )}
       </button>
       {/* Chart canvases must stay mounted while visible (useChartJs mount
           effect has [] deps) — the whole block toggles, never the canvas
           within it, so collapse/expand fully remounts the chart. */}
       {expanded && (
-        <div className="mt-2.5 h-48">
+        <LongPressChartGate
+          className="mt-2.5 h-48"
+          onScrubX={series.type === 'line' ? scrubStep : undefined}
+        >
           <SingleRunChart
             type={series.type}
             entries={series.entries}
@@ -255,7 +277,7 @@ function MetricFeedCard({
             activeLabels={series.type === 'histogram' ? activeLabels : undefined}
             fill
           />
-        </div>
+        </LongPressChartGate>
       )}
     </div>
   )
