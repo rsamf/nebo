@@ -645,16 +645,6 @@ An AI agent can use these to autonomously run experiments, diagnose
 failures, patch code, ask questions about runs, and iterate.
 
 
-Q&A Chat
-=========
-
-Nebo supports querying runs using natural language. From the web UI, users can open the Chat tab in the right panel and ask questions like "how did my training run go?" or "what metrics are underperforming?"
-
-The daemon delegates Q&A to Claude Code CLI, spawning it as a subprocess with MCP config pointing back to itself. Claude Code reads the run's state via MCP tools and generates an answer.
-
-This requires Claude Code CLI to be installed on the system where the daemon runs.
-
-
 Notebook Embedding via ``nb.show()``
 ======================================
 
