@@ -4,7 +4,7 @@ import { useComparisonContext } from '@/hooks/useComparisonContext'
 
 /**
  * True if this loggable has any content worth surfacing in a tab view —
- * logs, metrics, images, or audio. Used to decide whether to
+ * text, metrics, images, or audio. Used to decide whether to
  * render the bordered tab area at all (an empty function node or a
  * globals-only run shouldn't show an empty tab strip).
  */
@@ -17,12 +17,12 @@ export function useLoggableHasContent(runId: string, loggableId: string): boolea
     const checkRun = (rid: string): boolean => {
       const r = runs.get(rid)
       if (!r) return false
-      // O(1) checks first — the log scan is O(n) over a possibly huge array.
+      // O(1) checks first — the text scan is O(n) over a possibly huge array.
       const m = r.loggableMetrics?.[loggableId]
       if (m && Object.keys(m).length > 0) return true
       if ((r.loggableImages?.[loggableId]?.length ?? 0) > 0) return true
       if ((r.loggableAudio?.[loggableId]?.length ?? 0) > 0) return true
-      return r.logs?.some(l => l.node === loggableId) ?? false
+      return r.texts?.some(t => t.node === loggableId) ?? false
     }
 
     if (isComparison) return comparisonRunIds.some(checkRun)

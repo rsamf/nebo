@@ -115,12 +115,18 @@ export interface FlatRow {
   depth: number
   isLeaf: boolean
   leaf: StreamLeaf | null
+  // Collapsed branch rows carry every visible descendant leaf here; the
+  // canvas merges their datapoints onto the single branch row instead of
+  // dropping them with the hidden child rows.
+  mergedLeaves?: StreamLeaf[]
 }
 
 // Flatten the tree into display rows, honoring collapse + search query +
 // active modalities. A leaf row shows when its modality is active and (no
 // query OR its path matches). A branch shows when it has any visible
-// descendant leaf; a collapsed branch hides its children but still shows.
+// descendant leaf; a collapsed branch hides its children but renders their
+// merged datapoints on its own row. A node can be both a stream and a parent
+// (/a/b logged alongside /a/b/c): its own leaf renders on the branch row.
 export function flattenRows(
   nodes: StreamTreeNode[],
   collapsed: Set<string>,
@@ -131,8 +137,12 @@ export function flattenRows(
   const leafVisible = (leaf: StreamLeaf) =>
     activeModalities.has(leaf.modality) && (!q || leaf.path.toLowerCase().includes(q))
   const hasVisibleLeaf = (node: StreamTreeNode): boolean => {
-    if (node.leaf && node.children.length === 0) return leafVisible(node.leaf)
+    if (node.leaf && leafVisible(node.leaf)) return true
     return node.children.some(hasVisibleLeaf)
+  }
+  const collectVisible = (node: StreamTreeNode, into: StreamLeaf[]) => {
+    if (node.leaf && leafVisible(node.leaf)) into.push(node.leaf)
+    for (const c of node.children) collectVisible(c, into)
   }
   const out: FlatRow[] = []
   const walk = (ns: StreamTreeNode[], depth: number) => {
@@ -143,8 +153,15 @@ export function flattenRows(
         continue
       }
       if (!hasVisibleLeaf(n)) continue
-      out.push({ key: n.path, label: n.key, path: n.path, depth, isLeaf: false, leaf: null })
-      if (!collapsed.has(n.path)) walk(n.children, depth + 1)
+      if (collapsed.has(n.path)) {
+        const merged: StreamLeaf[] = []
+        collectVisible(n, merged)
+        out.push({ key: n.path, label: n.key, path: n.path, depth, isLeaf: false, leaf: null, mergedLeaves: merged })
+      } else {
+        const ownLeaf = n.leaf && leafVisible(n.leaf) ? n.leaf : null
+        out.push({ key: n.path, label: n.key, path: n.path, depth, isLeaf: false, leaf: ownLeaf })
+        walk(n.children, depth + 1)
+      }
     }
   }
   walk(nodes, 0)

@@ -258,7 +258,7 @@ class TestSdkPrecedence:
         try:
             nb.init(uri=str(logdir), group=init_group)
             with nb.start_run(name="r", group=start_group):
-                nb.log("hi")
+                nb.log_text("text", "hi")
         finally:
             SessionState.reset_singleton()
             nb._auto_init_done = False

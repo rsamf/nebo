@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useStore } from '@/store'
 import { useRunData } from '@/hooks/useRunData'
 import { runDisplayName } from '@/lib/runTree'
@@ -18,7 +18,6 @@ import { ArrowLeft, Bell, Settings } from 'lucide-react'
 // tracker at the bottom, and the overlay sheets.
 export function MobileRunView({ runId }: { runId: string }) {
   const run = useRunData(runId)
-  const customName = useStore(s => s.runNames.get(runId))
   const selectRun = useStore(s => s.selectRun)
   const selectGroup = useStore(s => s.selectGroup)
   const runTree = useStore(s => s.runTree)
@@ -29,6 +28,22 @@ export function MobileRunView({ runId }: { runId: string }) {
   const [alertsOpen, setAlertsOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
+  // A nebo:// link can be followed from inside a sheet (the notes markdown
+  // in the info sheet). Close every overlay so the feed can scroll the
+  // target card into view behind them. Deferred to a frame so the effect
+  // body never sets state synchronously.
+  const pendingNavTarget = useStore(s => s.pendingNavTarget)
+  useEffect(() => {
+    if (!pendingNavTarget) return
+    const raf = requestAnimationFrame(() => {
+      setInfoOpen(false)
+      setAlertsOpen(false)
+      setSettingsOpen(false)
+      setNodeSheet(null)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [pendingNavTarget])
+
   if (!run) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -37,7 +52,7 @@ export function MobileRunView({ runId }: { runId: string }) {
     )
   }
 
-  const name = runDisplayName(run.summary, customName)
+  const name = runDisplayName(run.summary)
   const group = runTree.runs[runId]
 
   return (

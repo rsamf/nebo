@@ -166,7 +166,7 @@ class FileTransport:
                 resolved.append(r)
         with self._lock:
             for event in coalesce(resolved):
-                self._writer.write_entry(event.get("type", "log"), event)
+                self._writer.write_entry(event.get("type", "text"), event)
             self._stream.flush()
 
     def send_event(self, event: dict) -> None:

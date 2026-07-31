@@ -66,12 +66,12 @@ class TestMCPObservationTools:
         assert "error" in result
 
     @pytest.mark.asyncio
-    async def test_get_logs_accepts_loggable_id_kwarg(self) -> None:
-        """get_logs should accept loggable_id= filter keyword."""
-        from nebo.mcp.tools import get_logs
-        result = await get_logs(loggable_id="some_id", server_url="http://localhost:19999")
-        # Should not raise; structure returns {"logs": [...]}
-        assert "logs" in result or "error" in result
+    async def test_get_text_accepts_loggable_id_kwarg(self) -> None:
+        """get_text should accept loggable_id= filter keyword."""
+        from nebo.mcp.tools import get_text
+        result = await get_text(loggable_id="some_id", server_url="http://localhost:19999")
+        # Should not raise; structure returns {"texts": [...]}
+        assert "texts" in result or "error" in result
 
     def test_mcp_server_registers_loggable_status_tool(self) -> None:
         """MCP_TOOLS should expose nebo_get_loggable_status (renamed from nebo_get_node_status)."""
@@ -79,6 +79,13 @@ class TestMCPObservationTools:
         names = [t["name"] for t in MCP_TOOLS]
         assert "nebo_get_loggable_status" in names
         assert "nebo_get_node_status" not in names
+
+    def test_mcp_server_registers_get_text_tool(self) -> None:
+        """The text-read tool is nebo_get_text (renamed from nebo_get_logs)."""
+        from nebo.mcp.server import MCP_TOOLS
+        names = [t["name"] for t in MCP_TOOLS]
+        assert "nebo_get_text" in names
+        assert "nebo_get_logs" not in names
 
 
 class TestMCPLoadFileTool:
@@ -223,9 +230,10 @@ class TestMCPWriteTools:
         finally:
             client_mod._post = original  # type: ignore[assignment]
 
-        log_events = [e for e in captured if e.get("type") == "log"]
-        assert log_events
-        assert all(e["loggable_id"] == "__agent__" for e in log_events)
+        text_events = [e for e in captured if e.get("type") == "text"]
+        assert text_events
+        assert all(e["loggable_id"] == "__agent__" for e in text_events)
+        assert all("level" not in e for e in text_events)
 
 
 class TestMCPWaitForAlert:

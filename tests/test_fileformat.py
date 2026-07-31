@@ -37,7 +37,7 @@ def test_write_and_read_entries():
     writer = NeboFileWriter(buf, run_id="test-run", script_path="test.py")
     writer.write_header()
 
-    writer.write_entry("log", {"node": "my_func", "message": "hello", "timestamp": 1000.0})
+    writer.write_entry("text", {"node": "my_func", "message": "hello", "timestamp": 1000.0})
     writer.write_entry("metric", {"node": "my_func", "name": "loss", "value": 0.5, "step": 0, "timestamp": 1000.1})
     writer.close()
 
@@ -48,7 +48,7 @@ def test_write_and_read_entries():
 
     entries = list(reader.read_entries())
     assert len(entries) == 2
-    assert entries[0]["type"] == "log"
+    assert entries[0]["type"] == "text"
     assert entries[0]["payload"]["message"] == "hello"
     assert entries[1]["type"] == "metric"
     assert entries[1]["payload"]["value"] == 0.5
@@ -81,9 +81,9 @@ def test_skip_entry_by_size():
     buf = io.BytesIO()
     writer = NeboFileWriter(buf, run_id="test-run", script_path="test.py")
     writer.write_header()
-    writer.write_entry("log", {"message": "first"})
-    writer.write_entry("log", {"message": "second"})
-    writer.write_entry("log", {"message": "third"})
+    writer.write_entry("text", {"message": "first"})
+    writer.write_entry("text", {"message": "second"})
+    writer.write_entry("text", {"message": "third"})
     writer.close()
 
     buf.seek(0)
@@ -110,7 +110,7 @@ def test_file_on_disk():
         path = f.name
         writer = NeboFileWriter(f, run_id="disk-test", script_path="script.py")
         writer.write_header()
-        writer.write_entry("log", {"message": "from disk"})
+        writer.write_entry("text", {"message": "from disk"})
         writer.close()
 
     with open(path, "rb") as f:
@@ -223,14 +223,14 @@ def test_fileformat_v2_writes_loggable_id_natively():
     buf = io.BytesIO()
     writer = NeboFileWriter(buf, run_id="r1", script_path="s.py")
     writer.write_header()
-    writer.write_entry("log", {"loggable_id": "x", "message": "hi", "timestamp": 1.0})
+    writer.write_entry("text", {"loggable_id": "x", "message": "hi", "timestamp": 1.0})
     writer.close()
 
     buf.seek(0)
     reader = NeboFileReader(buf)
     reader.read_header()
     raw = list(reader.read_entries_raw())
-    assert raw[0]["type"] == "log"
+    assert raw[0]["type"] == "text"
     assert raw[0]["payload"].get("loggable_id") == "x"
     assert "node" not in raw[0]["payload"]
 
@@ -430,3 +430,63 @@ class TestFormatV4:
             "values": [2.0], "tags": [],
         })
         assert out[0]["value"] == 2.0
+
+
+class TestTextEntryRename:
+    """logs -> text rename at the file-format layer: writers emit entry
+    code 9 ("text"); code 0 ("log") survives as a legacy read spelling."""
+
+    def test_entry_codes(self):
+        from nebo.core.fileformat import ENTRY_TYPES
+
+        assert ENTRY_TYPES["text"] == 9   # what writers emit now
+        assert ENTRY_TYPES["log"] == 0    # legacy spelling, read compat only
+
+    def test_text_entry_frame_starts_with_type_byte_9(self):
+        from nebo.core.fileformat import NeboFileWriter
+
+        buf = io.BytesIO()
+        writer = NeboFileWriter(buf, run_id="r", script_path="s.py")
+        writer.write_header()
+        header_end = buf.tell()
+        writer.write_entry("text", {
+            "type": "text", "loggable_id": "__global__", "name": "status",
+            "message": "hi", "step": None, "timestamp": 1.0,
+        })
+        frame = buf.getvalue()[header_end:]
+        assert frame[0] == 9
+
+    def test_legacy_log_entry_frame_starts_with_type_byte_0(self):
+        from nebo.core.fileformat import NeboFileWriter
+
+        buf = io.BytesIO()
+        writer = NeboFileWriter(buf, run_id="r", script_path="s.py")
+        writer.write_header()
+        header_end = buf.tell()
+        writer.write_entry("log", {
+            "type": "log", "loggable_id": "__global__", "name": "text",
+            "message": "old", "timestamp": 1.0,
+        })
+        frame = buf.getvalue()[header_end:]
+        assert frame[0] == 0
+
+    def test_log_text_shaped_payload_roundtrips(self):
+        """The exact wire shape nb.log_text emits round-trips unchanged."""
+        from nebo.core.fileformat import NeboFileReader, NeboFileWriter
+
+        payload = {
+            "type": "text", "loggable_id": "__global__", "name": "status",
+            "message": "msg", "step": 3, "timestamp": 1.5,
+        }
+        buf = io.BytesIO()
+        writer = NeboFileWriter(buf, run_id="r", script_path="s.py")
+        writer.write_header()
+        writer.write_entry("text", dict(payload))
+        writer.close()
+
+        buf.seek(0)
+        reader = NeboFileReader(buf)
+        reader.read_header()
+        (entry,) = list(reader.read_entries())
+        assert entry["type"] == "text"
+        assert entry["payload"] == payload

@@ -14,7 +14,7 @@ import nebo as nb
 @nb.fn()
 def fetch_context(query: str) -> list[str]:
     """Retrieve relevant context documents for the query."""
-    nb.log(f"Fetching context for: {query}")
+    nb.log_text("status", f"Fetching context for: {query}")
     time.sleep(0.2)
     return [f"Document about {query}", f"Reference for {query}"]
 
@@ -25,23 +25,23 @@ class Agent:
 
     def think(self, query: str, context: list[str]):
         """Analyze the query and context to form a plan."""
-        nb.log(f"Thinking about: {query}")
-        nb.log(f"Using {len(context)} context documents")
+        nb.log_text("thoughts", f"Thinking about: {query}")
+        nb.log_text("thoughts", f"Using {len(context)} context documents")
         nb.log_line("context_docs", float(len(context)))
         time.sleep(0.3)
         return {"plan": f"Respond to '{query}' using context"}
 
     def act(self, plan: dict) -> str:
         """Execute the plan to generate a response."""
-        nb.log(f"Acting on plan: {plan['plan']}")
+        nb.log_text("actions", f"Acting on plan: {plan['plan']}")
         time.sleep(0.3)
         result = f"Response based on: {plan['plan']}"
-        nb.log(f"Generated response: {result[:50]}...")
+        nb.log_text("actions", f"Generated response: {result[:50]}...")
         return result
 
     def reflect(self, query: str, response: str) -> dict:
         """Evaluate the quality of the response."""
-        nb.log("Reflecting on response quality")
+        nb.log_text("reflections", "Reflecting on response quality")
         score = 0.85
         nb.log_line("quality_score", score)
         time.sleep(0.2)

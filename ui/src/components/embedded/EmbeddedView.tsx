@@ -61,8 +61,8 @@ export function EmbeddedView({ spec }: { spec: EmbeddedSpec }) {
       return <EmbeddedRun runId={spec.runId} />
     case 'node':
       return <EmbeddedNode spec={spec} />
-    case 'logs':
-      return <EmbeddedLogs spec={spec} />
+    case 'text':
+      return <EmbeddedText spec={spec} />
     // Plural (gallery) and singular (filtered) share a renderer; the
     // component already narrows by `spec.name` when set.
     case 'metrics':
@@ -176,26 +176,30 @@ function EmbeddedNode({ spec }: { spec: EmbeddedSpec }) {
   )
 }
 
-function EmbeddedLogs({ spec }: { spec: EmbeddedSpec }) {
-  const logsRaw = useStore(s => s.runs.get(spec.runId)?.logs)
-  const logs = logsRaw ?? EMPTY_LOGS
+function EmbeddedText({ spec }: { spec: EmbeddedSpec }) {
+  const textsRaw = useStore(s => s.runs.get(spec.runId)?.texts)
+  const texts = textsRaw ?? EMPTY_TEXTS
   const graph = useStore(s => s.runs.get(spec.runId)?.graph)
   const filterNodeId = useMemo(
     () => resolveNodeRef(spec.nodeRef, graph?.nodes),
     [spec.nodeRef, graph?.nodes],
   )
-  const filtered = filterNodeId ? logs.filter(l => l.node === filterNodeId) : logs
+  const filtered = texts
+    .filter(t => (filterNodeId ? t.node === filterNodeId : true))
+    .filter(t => (spec.name ? t.name === spec.name : true))
 
   return (
     <ScrollArea className="h-screen">
       <div className="font-mono text-xs p-3 space-y-0.5">
         {filtered.length === 0 && (
-          <p className="text-muted-foreground">No logs</p>
+          <p className="text-muted-foreground">No text</p>
         )}
-        {filtered.map((l, i) => (
-          <div key={i} className={l.level === 'error' ? 'text-red-400' : l.level === 'warning' ? 'text-yellow-400' : ''}>
-            {l.node && <span className="text-muted-foreground mr-2">[{l.node}]</span>}
-            <span>{l.message}</span>
+        {filtered.map((t, i) => (
+          <div key={i}>
+            <span className="text-muted-foreground mr-2">
+              {t.node && `[${t.node}] `}{t.name}{t.step != null ? `@${t.step}` : ''}:
+            </span>
+            <span>{t.message}</span>
           </div>
         ))}
       </div>
@@ -322,7 +326,7 @@ function EmbeddedAudio({ spec }: { spec: EmbeddedSpec }) {
 // Module-level empty fallbacks: shared references prevent zustand selectors
 // from returning a fresh `[]` / `{}` on every render and re-firing the
 // subscription.
-const EMPTY_LOGS: import('@/lib/api').LogEntry[] = []
+const EMPTY_TEXTS: import('@/lib/api').TextEntry[] = []
 const EMPTY_METRICS_MAP: Record<string, Record<string, import('@/lib/api').LoggableMetricSeries>> = {}
 const EMPTY_IMAGES_MAP: Record<string, import('@/store').ImageEntry[]> = {}
 const EMPTY_AUDIO_MAP: Record<string, import('@/store').AudioEntry[]> = {}

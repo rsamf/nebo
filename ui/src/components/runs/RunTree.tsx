@@ -17,7 +17,6 @@ import type { RunSummary } from '@/lib/api'
 export function RunTree({ query = '' }: { query?: string }) {
   const runs = useStore(s => s.runs)
   const runTree = useStore(s => s.runTree)
-  const runNames = useStore(s => s.runNames)
   const selectedRunId = useStore(s => s.selectedRunId)
   const selectRun = useStore(s => s.selectRun)
 
@@ -25,7 +24,7 @@ export function RunTree({ query = '' }: { query?: string }) {
   const byId = new Map(summaries.map(s => [s.id, s] as [string, RunSummary]))
   const placements = runTree.runs
 
-  const filter = filterRunTree(runTree, byId, s => runDisplayName(s, runNames.get(s.id)), query)
+  const filter = filterRunTree(runTree, byId, s => runDisplayName(s), query)
   const searching = filter !== null
 
   const topGroups = Object.keys(runTree.groups)
@@ -75,8 +74,8 @@ function GroupBranch({
   const runTree = useStore(s => s.runTree)
   const userExpanded = useStore(s => s.expandedGroups.has(path))
   const toggle = useStore(s => s.toggleGroupExpanded)
-  const selectGroup = useStore(s => s.selectGroup)
-  const selectedGroup = useStore(s => s.selectedGroup)
+  const selectDoc = useStore(s => s.selectDoc)
+  const selectedDoc = useStore(s => s.selectedDoc)
   const selectRun = useStore(s => s.selectRun)
   const selectedRunId = useStore(s => s.selectedRunId)
 
@@ -96,41 +95,42 @@ function GroupBranch({
 
   return (
     <div>
-      <div
-        className={cn(
-          'flex items-center gap-1 rounded px-1.5 py-1 text-xs',
-          selectedGroup === path && 'bg-muted',
-        )}
+      {/* Clicking a group anywhere only toggles collapse — there is no
+          group view to navigate to. Its markdown docs are tree leaves. */}
+      <button
+        onClick={() => toggle(path)}
+        className="flex w-full items-center gap-1 rounded px-1.5 py-1 text-left text-xs hover:bg-muted/50"
         style={{ paddingLeft: 6 + depth * 12 }}
+        title={path}
       >
-        <button
-          onClick={() => toggle(path)}
-          className="shrink-0 text-muted-foreground hover:text-foreground"
-          aria-label={expanded ? 'Collapse group' : 'Expand group'}
-        >
-          <ChevronRight
-            className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-90')}
-          />
-        </button>
-        {/* Clicking the folder opens it both ways: the branch expands and the
-            group page shows its docs + runs. The chevron toggles without
-            navigating. */}
-        <button
-          onClick={() => {
-            toggle(path)
-            selectGroup(path)
-          }}
-          className="flex items-center gap-1 min-w-0 flex-1 text-left hover:text-foreground"
-          title={path}
-        >
-          <span className="truncate font-medium">{leaf}</span>
-          {docs.length > 0 && (
-            <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
-          )}
-        </button>
-      </div>
+        <ChevronRight
+          className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-90')}
+        />
+        <span className="truncate font-medium">{leaf}</span>
+      </button>
       {expanded && (
         <div>
+          {docs.map(name => {
+            const isSel = selectedDoc?.group === path && selectedDoc?.name === name
+            return (
+              <button
+                key={name}
+                onClick={() => selectDoc({ group: path, name })}
+                className={cn(
+                  'flex w-full items-center gap-1 rounded px-1.5 py-1 text-left text-xs',
+                  isSel ? 'bg-muted' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                )}
+                style={{ paddingLeft: 6 + (depth + 1) * 12 }}
+                title={`${path}/${name}`}
+              >
+                {/* chevron-sized slot keeps doc labels aligned with runs */}
+                <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                  <FileText className="h-3 w-3" />
+                </span>
+                <span className="min-w-0 flex-1 truncate">{name}</span>
+              </button>
+            )
+          })}
           {childGroups.map(g => (
             <GroupBranch
               key={g}

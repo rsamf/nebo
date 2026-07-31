@@ -13,10 +13,10 @@ class TestProtocol:
 
     def test_message_to_json(self) -> None:
         """Message should serialize to JSON."""
-        msg = Message(type=MessageType.LOG, data={"message": "hello"}, loggable_id="my_node")
+        msg = Message(type=MessageType.TEXT, data={"message": "hello"}, loggable_id="my_node")
         raw = msg.to_json()
         parsed = json.loads(raw)
-        assert parsed["type"] == "log"
+        assert parsed["type"] == "text"
         assert parsed["data"]["message"] == "hello"
         assert parsed["loggable_id"] == "my_node"
 
@@ -36,7 +36,7 @@ class TestProtocol:
     def test_encode_decode_batch(self) -> None:
         """Batch encoding/decoding should round-trip."""
         events = [
-            {"type": "log", "message": "hello"},
+            {"type": "text", "message": "hello"},
             {"type": "metric", "name": "loss", "value": 0.1},
         ]
         encoded = encode_batch(events)
@@ -45,7 +45,7 @@ class TestProtocol:
 
     def test_message_types_enum(self) -> None:
         """All expected message types should be defined."""
-        assert MessageType.LOG.value == "log"
+        assert MessageType.TEXT.value == "text"
         assert MessageType.METRIC.value == "metric"
         assert MessageType.PROGRESS.value == "progress"
 
@@ -54,8 +54,8 @@ class TestDaemonIngest:
     """Tests for the daemon state event ingestion."""
 
     @pytest.mark.asyncio
-    async def test_ingest_log_event(self) -> None:
-        """Daemon state should ingest log events."""
+    async def test_ingest_text_event(self) -> None:
+        """Daemon state should ingest text events."""
         from nebo.server.daemon import DaemonState
 
         state = DaemonState()
@@ -67,11 +67,11 @@ class TestDaemonIngest:
         assert "my_node" in state.runs["r1"].loggables
 
         await state.ingest_events([{
-            "type": "log",
+            "type": "text",
             "loggable_id": "my_node",
-            "message": "test log",
+            "message": "test text",
         }], "r1")
-        assert len(state.runs["r1"].logs) == 1
+        assert len(state.runs["r1"].texts) == 1
 
     @pytest.mark.asyncio
     async def test_ingest_edge(self) -> None:

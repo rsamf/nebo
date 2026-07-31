@@ -10,7 +10,7 @@ and exports predictions to a JSON file.
 
 @nb.fn()
 def classify():
-    nb.log("Classifying images")
+    nb.log_text("status", "Classifying images")
     nb.log_line("accuracy", 0.92)
 
 

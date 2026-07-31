@@ -808,12 +808,12 @@ class TestNodeMaterialization:
         assert result == 6
 
     def test_node_materializes_on_first_log(self) -> None:
-        """A decorated function should also be materialized when it calls nb.log()."""
-        from nebo.logging.logger import log
+        """A decorated function should also be materialized when it calls nb.log_text()."""
+        from nebo.logging.logger import log_text
 
         @fn()
         def logging_function():
-            log("hello")
+            log_text("text", "hello")
 
         logging_function()
         state = get_state()
@@ -850,7 +850,7 @@ class TestNodeMaterialization:
 
         @fn()
         def logger_fn():
-            nb.log("hello")
+            nb.log_text("text", "hello")
             return 42
 
         @fn()
@@ -873,11 +873,11 @@ class TestNodeMaterialization:
             )
 
     def test_undecorated_function_does_not_appear_in_graph(self) -> None:
-        """An UNDECORATED function that calls nb.log() must not create a graph node."""
+        """An UNDECORATED function that calls nb.log_text() must not create a graph node."""
 
         def plain_function():
-            # No @nb.fn — calling nb.log here should not invent a node
-            nb.log("hello from nowhere")
+            # No @nb.fn — calling nb.log_text here should not invent a node
+            nb.log_text("text", "hello from nowhere")
 
         plain_function()
         state = get_state()

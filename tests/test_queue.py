@@ -22,7 +22,7 @@ class TestLogQueue:
         q.start()
 
         for i in range(10):
-            q.put_event({"type": "log", "message": f"msg {i}"})
+            q.put_event({"type": "text", "message": f"msg {i}"})
 
         time.sleep(0.3)
         q.stop()
@@ -39,7 +39,7 @@ class TestLogQueue:
         q = LogQueue(flush_callback=on_flush, flush_interval=10.0)
         q.start()
 
-        q.put_event({"type": "log", "message": "last msg"})
+        q.put_event({"type": "text", "message": "last msg"})
         time.sleep(0.05)
         q.stop()
 

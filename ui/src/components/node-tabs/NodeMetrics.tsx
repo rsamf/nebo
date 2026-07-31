@@ -227,6 +227,16 @@ export function MetricBlock({
     <div data-export-atom="chart" className={fill ? 'h-full flex flex-col min-h-0' : undefined}>
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-medium text-foreground truncate flex-1 min-w-0">{name}</span>
+        {/* Server-side decimation hint: the chart shows a min/max subset
+            of what the daemon stores (GET /runs/{id}/metrics?points=). */}
+        {series.downsampled && series.total_points != null && (
+          <span
+            className="shrink-0 text-[10px] text-muted-foreground"
+            title="Decimated for display — the daemon stores the full series"
+          >
+            {series.entries.length.toLocaleString()} of {series.total_points.toLocaleString()} pts
+          </span>
+        )}
         <HeaderActions
           onExpand={() => setModalOpen(true)}
           onDownloadPng={() => downloadCanvasPng(chartWrapperRef.current, name)}
@@ -408,7 +418,6 @@ function ComparisonMetrics({
 }) {
   const runs = useStore(s => s.runs)
   const runColors = useStore(s => s.runColors)
-  const runNames = useStore(s => s.runNames)
   const getOrAssignRunColor = useStore(s => s.getOrAssignRunColor)
 
   useEffect(() => {
@@ -436,13 +445,11 @@ function ComparisonMetrics({
     })
   }, [comparisonRunIds])
 
-  // Prefer the user's client-side custom name → the SDK-emitted
-  // `run_name` (from `nb.init(name=...)`) → the script filename as a
-  // last resort. The chips in comparison views used to skip the
-  // `run_name` step and always fell back to the script's filename,
-  // which made user-supplied run names invisible.
+  // Prefer the SDK-emitted `run_name` (from `nb.init(name=...)`) → the
+  // script filename as a last resort. The chips in comparison views used
+  // to skip the `run_name` step and always fell back to the script's
+  // filename, which made user-supplied run names invisible.
   const runNameFor = (rid: string) =>
-    runNames.get(rid) ||
     runs.get(rid)?.summary.run_name ||
     runs.get(rid)?.summary.script_path.split('/').pop() ||
     rid
@@ -674,15 +681,12 @@ function ComparisonChart({
 }) {
   const runs = useStore(s => s.runs)
   const runColors = useStore(s => s.runColors)
-  const runNames = useStore(s => s.runNames)
 
-  // Prefer the user's client-side custom name → the SDK-emitted
-  // `run_name` (from `nb.init(name=...)`) → the script filename as a
-  // last resort. The chips in comparison views used to skip the
-  // `run_name` step and always fell back to the script's filename,
-  // which made user-supplied run names invisible.
+  // Prefer the SDK-emitted `run_name` (from `nb.init(name=...)`) → the
+  // script filename as a last resort. The chips in comparison views used
+  // to skip the `run_name` step and always fell back to the script's
+  // filename, which made user-supplied run names invisible.
   const runNameFor = (rid: string) =>
-    runNames.get(rid) ||
     runs.get(rid)?.summary.run_name ||
     runs.get(rid)?.summary.script_path.split('/').pop() ||
     rid
@@ -727,7 +731,7 @@ function ComparisonChart({
   if (type === 'histogram') return <ComparisonHistogram runIds={runIds} runColors={runColors} runNameFor={runNameFor} seriesFor={seriesFor} resetSignal={resetSignal} />
   if (type === 'scatter') return <ComparisonScatter runIds={runIds} runColors={runColors} runNameFor={runNameFor} seriesFor={seriesFor} resetSignal={resetSignal} />
   // Pie: one pie per run, rendered in the standard split-panel layout
-  // (matches Logs/Images/Audio comparison styling). The cell header
+  // (matches Text/Images/Audio comparison styling). The cell header
   // already shows the run name + color stripe, so we just render the
   // chart in the body. The outer height scales with the grid's row
   // count so each pie panel gets a consistent ~PIE_ROW_PX of vertical

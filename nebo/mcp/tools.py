@@ -50,15 +50,15 @@ async def get_loggable_status(loggable_id: str, run_id: Optional[str] = None, se
         return _daemon_unreachable(server_url, e)
 
 
-async def get_logs(
+async def get_text(
     loggable_id: Optional[str] = None,
     run_id: Optional[str] = None,
     limit: int = 100,
     server_url: str = _DEFAULT_URL,
 ) -> dict[str, Any]:
-    """Get recent logs, optionally filtered by loggable and run."""
+    """Get recent text entries, optionally filtered by loggable and run."""
     try:
-        return _client.get_logs(loggable_id=loggable_id, run_id=run_id, limit=limit, url=server_url)
+        return _client.get_text(loggable_id=loggable_id, run_id=run_id, limit=limit, url=server_url)
     except Exception as e:
         return _daemon_unreachable(server_url, e)
 
@@ -313,12 +313,11 @@ async def log_text(
     run_id: Optional[str] = None,
     server_url: str = _DEFAULT_URL,
 ) -> dict[str, Any]:
-    """Push one or more text log entries into a run.
+    """Push one or more text entries into a run.
 
-    Each entry: ``{loggable_id?, message, name?, level?, step?}``. ``level``
-    is one of ``info`` (default), ``warning``, ``error``. ``loggable_id``
-    defaults to ``__agent__`` — the sandbox loggable for entries authored by
-    an external agent.
+    Each entry: ``{loggable_id?, name?, message, step?}``. ``name`` names the
+    text stream (default ``text``). ``loggable_id`` defaults to ``__agent__``
+    — the sandbox loggable for entries authored by an external agent.
     """
     items = _normalize_entries(entries)
     if not items:

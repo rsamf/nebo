@@ -45,7 +45,7 @@ def create_images(num_images: int = 200, size: int = 96) -> list[Image.Image]:
     images = []
     for i in nb.track(range(num_images)):
         img = _make_image(i, size)
-        nb.log(f"Created image {i}", step=i)
+        nb.log_text("status", f"Created image {i}", step=i)
         nb.log_image(img, name="created", step=i)
         images.append(img)
     return images
@@ -60,7 +60,7 @@ def warm_tint(images: list[Image.Image]) -> list[Image.Image]:
         arr[:, :, 0] = np.clip(arr[:, :, 0] * 1.3, 0, 255)
         arr[:, :, 2] = np.clip(arr[:, :, 2] * 0.6, 0, 255)
         out = Image.fromarray(arr.astype(np.uint8))
-        nb.log(f"Applied warm tint to image {i}", step=i)
+        nb.log_text("status", f"Applied warm tint to image {i}", step=i)
         nb.log_image(out, name="warm_tint", step=i)
         result.append(out)
     return result
@@ -73,7 +73,7 @@ def sharpen(images: list[Image.Image]) -> list[Image.Image]:
     for i, img in enumerate(images):
         sharpened = img.filter(ImageFilter.SHARPEN)
         out = ImageEnhance.Contrast(sharpened).enhance(1.8)
-        nb.log(f"Sharpened image {i}", step=i)
+        nb.log_text("status", f"Sharpened image {i}", step=i)
         nb.log_image(out, name="sharpened", step=i)
         result.append(out)
     return result
@@ -104,7 +104,7 @@ def analyze(
       * warm — same images shifted right (reds boosted)
       * sharp — same images shifted up (contrast boosted)
 
-    Click any point in the UI to filter the logs/images panels to that
+    Click any point in the UI to filter the text/images panels to that
     exact image.
     """
     for i, (o, w, s) in enumerate(zip(originals, warm, sharp)):
@@ -120,7 +120,7 @@ def analyze(
             },
             colors=True,
         )
-        nb.log(f"Analyzed image {i}", step=i)
+        nb.log_text("status", f"Analyzed image {i}", step=i)
 
 
 def run_pipeline() -> list[Image.Image]:

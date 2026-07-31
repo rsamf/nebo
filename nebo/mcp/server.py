@@ -38,8 +38,8 @@ MCP_TOOLS = [
         },
     },
     {
-        "name": "nebo_get_logs",
-        "description": "Get recent log entries, optionally filtered by loggable and run.",
+        "name": "nebo_get_text",
+        "description": "Get recent text entries, optionally filtered by loggable and run.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -343,7 +343,7 @@ MCP_TOOLS = [
     {
         "name": "nebo_log_text",
         "description": (
-            "Log one or more text entries to a run. Mirrors nb.log. "
+            "Log one or more text entries to a run. Mirrors nb.log_text. "
             "loggable_id defaults to '__agent__' (sandbox for agent-authored "
             "entries) when omitted."
         ),
@@ -351,7 +351,7 @@ MCP_TOOLS = [
             "type": "object",
             "properties": {
                 "entries": {
-                    "description": "Single entry or list. Each: {run_id?, loggable_id?, message, level?, step?}.",
+                    "description": "Single entry or list. Each: {run_id?, loggable_id?, name?, message, step?}.",
                     "oneOf": [
                         {"type": "object"},
                         {"type": "array", "items": {"type": "object"}},
@@ -371,7 +371,7 @@ async def handle_tool_call(name: str, arguments: dict[str, Any], server_url: str
         # Observation
         "nebo_get_graph": lambda a: tools.get_graph(a.get("run_id"), server_url),
         "nebo_get_loggable_status": lambda a: tools.get_loggable_status(a["loggable_id"], a.get("run_id"), server_url),
-        "nebo_get_logs": lambda a: tools.get_logs(a.get("loggable_id"), a.get("run_id"), a.get("limit", 100), server_url),
+        "nebo_get_text": lambda a: tools.get_text(a.get("loggable_id"), a.get("run_id"), a.get("limit", 100), server_url),
         "nebo_get_metrics": lambda a: tools.get_metrics(a["loggable_id"], a.get("name"), server_url),
         "nebo_get_description": lambda a: tools.get_description(server_url),
         # Action

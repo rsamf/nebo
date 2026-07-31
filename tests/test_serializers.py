@@ -141,5 +141,5 @@ class TestPendingMedia:
         assert isinstance(out["data"], bytes)
         assert out["data"].startswith(b"\x89PNG")
         # Non-media events pass through untouched.
-        plain = {"type": "log", "message": "x"}
+        plain = {"type": "text", "message": "x"}
         assert resolve_media(plain) is plain

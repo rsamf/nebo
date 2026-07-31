@@ -17,11 +17,10 @@ export function MobileRunInfoSheet({
   onClose: () => void
 }) {
   const run = useStore(s => s.runs.get(runId))
-  const customName = useStore(s => s.runNames.get(runId))
   const [idsOpen, setIdsOpen] = useState(false)
 
   if (!run) return null
-  const name = runDisplayName(run.summary, customName)
+  const name = runDisplayName(run.summary)
   const description = run.graph?.workflow_description
   const config = run.graph?.run_config ?? run.summary.run_config ?? null
   const configEntries = config ? Object.entries(config) : []

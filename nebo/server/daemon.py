@@ -1,6 +1,6 @@
 """Persistent daemon server for nebo.
 
-The daemon outlives individual pipeline runs, retaining logs, errors, and DAG
+The daemon outlives individual pipeline runs, retaining text streams, metrics, and DAG
 state across crashes and restarts. AI agents connect via MCP to the same server.
 """
 
@@ -32,16 +32,13 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class LogEntry:
-    """A single log entry."""
+class TextEntry:
+    """A single named text entry."""
     timestamp: float
     node: Optional[str]
     message: str
     name: str = "text"
-    level: str = "info"
-    type: str = "log"
     step: Optional[int] = None
-    extra: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -65,7 +62,7 @@ class LoggableState:
     exec_count: int = 0
     is_source: bool = True
     params: dict = field(default_factory=dict)
-    logs: list[dict] = field(default_factory=list)
+    texts: list[dict] = field(default_factory=list)
     metrics: dict[str, list] = field(default_factory=dict)
     images: list[dict] = field(default_factory=list)
     audio: list[dict] = field(default_factory=list)
@@ -84,7 +81,7 @@ class Run:
     loggables: dict[str, "LoggableState"] = field(default_factory=dict)
     edges: list[dict[str, str]] = field(default_factory=list)
     _edge_set: set[tuple[str, str]] = field(default_factory=set, repr=False)
-    logs: list[LogEntry] = field(default_factory=list)
+    texts: list[TextEntry] = field(default_factory=list)
     metrics: dict[str, list] = field(default_factory=dict)
     source_hash: Optional[str] = None
     workflow_description: Optional[str] = None
@@ -164,7 +161,7 @@ class Run:
             "last_event_at": self.last_event_at or None,
             "node_count": sum(1 for l in self.loggables.values() if l.kind == "node"),
             "edge_count": len(self.edges),
-            "log_count": len(self.logs),
+            "text_count": len(self.texts),
             "run_name": self.run_name,
             "run_config": self.run_config,
             "metrics_index": metrics_index,
@@ -192,6 +189,60 @@ HEARTBEAT_METRIC = "last_event"
 # Cadence of the always-on heartbeat evaluator task (module-level so tests
 # can monkeypatch it down).
 HEARTBEAT_TICK_S = 1.0
+
+# Default per-series point cap on GET /runs/{id}/metrics (`?points=`).
+# `points=0` returns full fidelity — the CLI/MCP read paths go through the
+# loggable endpoint and are unaffected; this cap exists for the UI, where a
+# million-point series otherwise means a ~70 MB JSON response.
+DEFAULT_METRIC_POINTS = 2000
+
+
+def downsample_series(series: dict, points: int) -> dict:
+    """Cap an accumulating series' entries for the wire.
+
+    Line series use per-bucket min/max decimation (two kept points per
+    bucket — preserves spikes a uniform stride would erase); scatter uses a
+    uniform stride (its per-entry values aren't scalar). Snapshot types
+    pass through untouched. Always annotates ``total_points`` and
+    ``downsampled`` so the UI can show "N of M pts". Never mutates the
+    input — RAM-path callers hand over live series references.
+    """
+    entries = series.get("entries") or []
+    total = len(entries)
+    stype = series.get("type", "line")
+    annotated = dict(series)
+    annotated["total_points"] = total
+    annotated["downsampled"] = False
+    if points <= 0 or total <= points or stype not in ("line", "scatter"):
+        return annotated
+
+    if stype == "scatter":
+        stride = -(-total // points)  # ceil
+        keep_idx = list(range(0, total, stride))
+        if keep_idx[-1] != total - 1:
+            keep_idx.append(total - 1)
+    else:
+        n_buckets = max(1, points // 2)
+        keep: set[int] = {0, total - 1}
+        for b in range(n_buckets):
+            lo = (b * total) // n_buckets
+            hi = max(lo + 1, ((b + 1) * total) // n_buckets)
+            imin = imax = lo
+            vmin = vmax = None
+            for i in range(lo, min(hi, total)):
+                v = entries[i].get("value")
+                if not isinstance(v, (int, float)):
+                    continue
+                if vmin is None or v < vmin:
+                    vmin, imin = v, i
+                if vmax is None or v > vmax:
+                    vmax, imax = v, i
+            keep.add(imin)
+            keep.add(imax)
+        keep_idx = sorted(keep)
+    annotated["entries"] = [entries[i] for i in keep_idx]
+    annotated["downsampled"] = True
+    return annotated
 
 _ALERT_LEVEL_NAMES = {10: "DEBUG", 20: "INFO", 30: "WARN", 40: "ERROR"}
 
@@ -336,7 +387,7 @@ class DaemonState:
         # tree_updated after the batch.
         self.tree: Optional[Any] = None
         self._tree_dirty: bool = False
-        # RAM budget for resident point entries (metric points + log lines),
+        # RAM budget for resident point entries (metric points + text lines),
         # enforced by the janitor. Converted from MB at BYTES_PER_POINT.
         from nebo.server.cache import BYTES_PER_POINT, DEFAULT_RAM_BUDGET_MB
         self.ram_budget_points = (
@@ -454,10 +505,10 @@ class DaemonState:
         for lg in run.loggables.values():
             for series in lg.metrics.values():
                 series["entries"] = []
-            lg.logs = []
+            lg.texts = []
             lg.images = []
             lg.audio = []
-        run.logs = []
+        run.texts = []
         run.resident_points = 0
         run.ram_complete = False
 
@@ -503,27 +554,26 @@ class DaemonState:
         run = self.runs.get(run_id)
         return run.get_graph() if run is not None else None
 
-    def run_logs(
+    def run_texts(
         self, run_id: str, loggable_id: Optional[str] = None, limit: int = 100,
     ) -> Optional[list[dict]]:
         run = self._resident(run_id)
         if run is not None:
-            logs = run.logs
+            texts = run.texts
             if loggable_id:
-                logs = [l for l in logs if l.node == loggable_id]
+                texts = [t for t in texts if t.node == loggable_id]
             return [
                 {
-                    "timestamp": l.timestamp,
-                    "loggable_id": l.node,
-                    "name": l.name,
-                    "message": l.message,
-                    "level": l.level,
-                    "step": l.step,
+                    "timestamp": t.timestamp,
+                    "loggable_id": t.node,
+                    "name": t.name,
+                    "message": t.message,
+                    "step": t.step,
                 }
-                for l in logs[-limit:]
+                for t in texts[-limit:]
             ]
         if self.cache is not None and self.cache.has_run(run_id):
-            return self.cache.get_logs(run_id, loggable_id=loggable_id, limit=limit)
+            return self.cache.get_texts(run_id, loggable_id=loggable_id, limit=limit)
         return None
 
     def run_metrics(self, run_id: str) -> Optional[dict]:
@@ -550,18 +600,17 @@ class DaemonState:
                 "exec_count": lg.exec_count,
                 "is_source": lg.is_source,
                 "params": lg.params,
-                # Normalized to the /logs entry shape (raw wire events also
+                # Normalized to the /text entry shape (raw wire events also
                 # carry "type"); keeps RAM and SQL reads byte-identical.
-                "recent_logs": [
+                "recent_texts": [
                     {
                         "timestamp": e.get("timestamp"),
                         "loggable_id": loggable_id,
                         "name": e.get("name") or "text",
                         "message": e.get("message", ""),
-                        "level": e.get("level", "info"),
                         "step": e.get("step"),
                     }
-                    for e in lg.logs[-20:]
+                    for e in lg.texts[-20:]
                 ],
                 "metrics": lg.metrics,
                 "progress": lg.progress,
@@ -826,45 +875,61 @@ class DaemonState:
         events: list[dict],
         run_id: str | None = None,
         source: str = "network",
+        broadcast: bool = True,
     ) -> None:
-        """Ingest a batch of events into the appropriate run."""
-        async with self._lock:
-            rid = run_id or self.active_run_id
-            if not rid or rid not in self.runs:
-                # An evicted (or pre-restart) run that lives in the cache is
-                # rehydrated instead of recreated — its ingest-state (series
-                # type locks, loggable registry, counters) comes back, but
-                # not its point history: reads stay on the SQL path.
-                if rid and self.cache is not None and self.cache.has_run(rid):
-                    run = self._rehydrate_run(rid)
-                else:
-                    # Create run if it doesn't exist yet (script_path updated
-                    # by run_start event).
-                    run = self.create_run("direct", run_id=rid, source=source)
-                rid = run.id
+        """Ingest a batch of events into the appropriate run.
 
-            run = self.runs[rid]
-            # A watched file claiming a run this daemon owns over the network
-            # is an alias (e.g. a stray copy of the daemon's own remote-mode
-            # file placed in the logdir): its contents were already ingested
-            # once, so appending them again would double RAM state. The SQL
-            # layer would dedup identical rows (INSERT OR IGNORE); RAM
-            # appends would not.
-            if source == "watcher" and run.source == "network":
-                if rid not in self._alias_dropped:
-                    self._alias_dropped.add(rid)
-                    logger.warning(
-                        "ignoring watcher events for run %s: it is owned by "
-                        "a network client — a .nebo file in the watched "
-                        "logdir aliases it", rid,
-                    )
-                return
-            for event in events:
-                self._process_event(run, event, source)
+        ``broadcast=False`` skips the WS fan-out — used by the watcher's
+        deepen catch-up, which replays a file's whole history that browsers
+        hydrate via REST instead.
+
+        The batch is processed in slices, releasing ``self._lock`` (and
+        yielding to the event loop) between them, so a huge catch-up batch
+        can't starve concurrent requests for a whole 10k-event chunk.
+        """
+        _SLICE = 1000
+        rid = run_id
+        for start in range(0, max(len(events), 1), _SLICE):
+            chunk = events[start:start + _SLICE]
+            async with self._lock:
+                rid = run_id or self.active_run_id
+                if not rid or rid not in self.runs:
+                    # An evicted (or pre-restart) run that lives in the cache
+                    # is rehydrated instead of recreated — its ingest-state
+                    # (series type locks, loggable registry, counters) comes
+                    # back, but not its point history: reads stay on SQL.
+                    if rid and self.cache is not None and self.cache.has_run(rid):
+                        run = self._rehydrate_run(rid)
+                    else:
+                        # Create run if it doesn't exist yet (script_path
+                        # updated by run_start event).
+                        run = self.create_run("direct", run_id=rid, source=source)
+                    rid = run.id
+
+                run = self.runs[rid]
+                # A watched file claiming a run this daemon owns over the
+                # network is an alias (e.g. a stray copy of the daemon's own
+                # remote-mode file placed in the logdir): its contents were
+                # already ingested once, so appending them again would double
+                # RAM state. The SQL layer would dedup identical rows
+                # (INSERT OR IGNORE); RAM appends would not.
+                if source == "watcher" and run.source == "network":
+                    if rid not in self._alias_dropped:
+                        self._alias_dropped.add(rid)
+                        logger.warning(
+                            "ignoring watcher events for run %s: it is owned "
+                            "by a network client — a .nebo file in the "
+                            "watched logdir aliases it", rid,
+                        )
+                    return
+                for event in chunk:
+                    self._process_event(run, event, source)
+            if start + _SLICE < len(events):
+                await asyncio.sleep(0)
 
         # Broadcast to WebSocket clients: serialize ONCE, enqueue per
         # client, never await a socket here.
-        if self._ws_clients:
+        if broadcast and self._ws_clients:
             message = json.dumps(
                 {"type": "batch", "run_id": rid, "events": events},
                 default=str,
@@ -987,6 +1052,12 @@ class DaemonState:
         self, run: Run, event: dict, source: str = "network",
     ) -> None:
         """Process a single event into run state."""
+        # Normalize the legacy "log" spelling (entry code 0, pre-rename wire
+        # events) to "text" up front, so the remote-mode writer re-writes it
+        # as a text frame (code 9) and the WS broadcast — which reuses this
+        # same dict — carries "text".
+        if event.get("type") == "log":
+            event["type"] = "text"
         # Watcher-annotated media source ref (path, offset, length). Internal —
         # popped before the remote-mode writer or the WS broadcast can see it.
         media_src = event.pop("_media_src", None)
@@ -1004,7 +1075,7 @@ class DaemonState:
             getattr(run, "_file_writer", None) if source == "network" else None
         )
         if writer is not None:
-            entry_type = event.get("type", "log")
+            entry_type = event.get("type", "text")
             span = writer.write_entry(entry_type, dict(event))
             if (
                 media_src is None
@@ -1020,22 +1091,20 @@ class DaemonState:
         loggable_id = event.get("loggable_id")
         run.last_event_at = time.time()
 
-        if etype == "log":
-            entry = LogEntry(
+        if etype == "text":
+            entry = TextEntry(
                 timestamp=event.get("timestamp", time.time()),
                 node=loggable_id,
                 message=event.get("message", ""),
                 name=event.get("name") or "text",
-                level=event.get("level", "info"),
                 step=event.get("step"),
             )
-            run.logs.append(entry)
+            run.texts.append(entry)
             if loggable_id and loggable_id in run.loggables:
-                run.loggables[loggable_id].logs.append(event)
+                run.loggables[loggable_id].texts.append(event)
             run.resident_points += 1
-            self._cache_put(("log_row", run.id, loggable_id, entry.name,
-                             entry.timestamp, entry.step, entry.level,
-                             entry.message))
+            self._cache_put(("text_row", run.id, loggable_id, entry.name,
+                             entry.timestamp, entry.step, entry.message))
 
         elif etype == "metric":
             lid = event.get("loggable_id", "")
@@ -1755,8 +1824,8 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
     _write_private = os.environ.get("NEBO_WRITE_MODE", "private").lower() == "private"
     _GATED_PREFIXES = (
         "/events", "/ingest", "/run", "/runs",
-        "/logs", "/loggables", "/load",
-        "/graph", "/alerts", "/tree", "/groups",
+        "/text", "/loggables", "/load",
+        "/graph", "/alerts", "/tree", "/groups", "/resolve",
     )
 
     def _is_read(method: str) -> bool:
@@ -1849,21 +1918,27 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
             return JSONResponse(status_code=404, content={"error": f"Run '{run_id}' not found"})
         return graph
 
-    @app.get("/runs/{run_id}/logs")
-    async def get_run_logs(run_id: str, loggable_id: str | None = None, limit: int = 100):
+    @app.get("/runs/{run_id}/text")
+    async def get_run_text(run_id: str, loggable_id: str | None = None, limit: int = 100):
         await state.ensure_deep(run_id)
-        logs = state.run_logs(run_id, loggable_id=loggable_id, limit=limit)
-        if logs is None:
+        texts = state.run_texts(run_id, loggable_id=loggable_id, limit=limit)
+        if texts is None:
             return JSONResponse(status_code=404, content={"error": f"Run '{run_id}' not found"})
-        return {"logs": logs}
+        return {"texts": texts}
 
     @app.get("/runs/{run_id}/metrics")
-    async def get_run_metrics(run_id: str):
+    async def get_run_metrics(run_id: str, points: int = DEFAULT_METRIC_POINTS):
         await state.ensure_deep(run_id)
         metrics = state.run_metrics(run_id)
         if metrics is None:
             return JSONResponse(status_code=404, content={"error": f"Run '{run_id}' not found"})
-        return {"metrics": metrics}
+        return {"metrics": {
+            lid: {
+                name: downsample_series(series, points)
+                for name, series in series_map.items()
+            }
+            for lid, series_map in metrics.items()
+        }}
 
     @app.get("/runs/{run_id}/images")
     async def get_run_images(run_id: str):
@@ -2125,22 +2200,16 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
             "nodes": {}, "edges": [], "workflow_description": None,
         }
 
-    @app.get("/logs")
-    async def get_logs(loggable_id: str | None = None, limit: int = 100):
+    @app.get("/text")
+    async def get_text(loggable_id: str | None = None, limit: int = 100):
+        # Latest-run convenience endpoint; same entry shape as
+        # /runs/{run_id}/text (it used to drop step — kept full now).
         run = state.get_latest_run()
         if not run:
-            return {"logs": []}
+            return {"texts": []}
         await state.ensure_deep(run.id)
-        logs = state.run_logs(run.id, loggable_id=loggable_id, limit=limit) or []
-        return {"logs": [
-            {
-                "timestamp": l["timestamp"],
-                "loggable_id": l["loggable_id"],
-                "name": l["name"],
-                "message": l["message"],
-            }
-            for l in logs
-        ]}
+        texts = state.run_texts(run.id, loggable_id=loggable_id, limit=limit) or []
+        return {"texts": texts}
 
     @app.get("/loggables/{loggable_id}")
     async def get_loggable(loggable_id: str):
@@ -2180,6 +2249,72 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
     @app.get("/tree")
     async def get_tree():
         return state._tree_payload()
+
+    @app.get("/resolve")
+    async def resolve_reference(ref: str):
+        """Resolve a canonical ``nebo://`` reference: parsed components plus
+        whether the addressed resource exists on this daemon."""
+        from nebo.core.refs import GroupRef, format_ref, parse_ref
+
+        parsed = parse_ref(ref)
+        if parsed is None:
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"not a nebo:// reference: {ref!r}"},
+            )
+
+        if isinstance(parsed, GroupRef):
+            groups = state._tree_payload().get("groups", {})
+            return {
+                "ref": format_ref(parsed),
+                "kind": "group",
+                "path": parsed.path,
+                "resource": "group",
+                "exists": parsed.path in groups,
+            }
+
+        out: dict[str, Any] = {
+            "ref": format_ref(parsed),
+            "kind": "run",
+            "run_id": parsed.run_id,
+            "loggable_id": parsed.loggable_id,
+            "name": parsed.name,
+            "step": parsed.step,
+            "resource": (
+                "stream" if parsed.name
+                else "loggable" if parsed.loggable_id
+                else "run"
+            ),
+        }
+        summary = state.run_summary(parsed.run_id)
+        if summary is None:
+            out["exists"] = False
+            return out
+        if parsed.loggable_id is None:
+            out["exists"] = True
+            return out
+        await state.ensure_deep(parsed.run_id)
+        loggable = state.run_loggable(parsed.run_id, parsed.loggable_id)
+        if loggable is None:
+            out["exists"] = False
+            return out
+        if parsed.name is None:
+            out["exists"] = True
+            return out
+        # A stream name can belong to any modality on the loggable.
+        names: set[str] = set((loggable.get("metrics") or {}).keys())
+        texts = state.run_texts(
+            parsed.run_id, loggable_id=parsed.loggable_id, limit=1_000_000,
+        ) or []
+        for t in texts:
+            names.add(t.get("name") or "text")
+        for kind in ("image", "audio"):
+            listing = state.run_media_listing(parsed.run_id, kind) or {}
+            for item in listing.get(parsed.loggable_id, []):
+                if item.get("name"):
+                    names.add(item["name"])
+        out["exists"] = parsed.name in names
+        return out
 
     @app.post("/groups")
     async def create_group(body: dict[str, Any]):

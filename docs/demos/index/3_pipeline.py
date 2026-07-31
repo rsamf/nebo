@@ -4,7 +4,7 @@ import nebo as nb
 @nb.fn(ui={"default_tab": "metrics"})
 def load_data():
     records = [{"id": i, "value": i * 0.5} for i in range(200)]
-    nb.log(f"Loaded {len(records)} records")
+    nb.log_text("status", f"Loaded {len(records)} records")
     for r in records:
         nb.log_line("value", r["value"])
     return records
@@ -15,7 +15,7 @@ def evaluate(records):
     for r in records:
         if r["value"] < 50:
             nb.log_line("value", r["value"], tags=["<50"])
-            nb.log(f"Found {r['value']} is under 50")
+            nb.log_text("findings", f"Found {r['value']} is under 50")
         else:
             nb.log_line("value", r["value"], tags=[">=50"])
 

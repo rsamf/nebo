@@ -64,11 +64,13 @@ class TestShow:
         handle = nb.show(dag=True)
         assert "dag" in handle.url
 
-    def test_logs_flag_with_node_filter(self) -> None:
+    def test_text_flag_with_node_filter(self) -> None:
         state = get_state()
         state._active_run_id = "r1"
-        handle = nb.show(node="train", logs=True)
-        assert "logs" in handle.url
+        handle = nb.show(node="train", text=True)
+        # True emits the bare flag, not text=
+        assert "text" in handle.url
+        assert "text=" not in handle.url
         assert "node=train" in handle.url
 
     def test_image_and_audio_singular(self) -> None:
@@ -83,7 +85,7 @@ class TestShow:
         state = get_state()
         state._active_run_id = "r1"
         with pytest.raises(ValueError):
-            nb.show(metric=True, logs=True)
+            nb.show(metric=True, text=True)
 
     def test_explicit_run_overrides_active(self) -> None:
         state = get_state()

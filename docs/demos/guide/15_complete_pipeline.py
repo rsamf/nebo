@@ -11,7 +11,7 @@ def generate(num_samples: int = 200, noise: float = 0.1, seed: int = 42):
     rng = np.random.default_rng(seed)
     t = np.linspace(0, 4 * np.pi, num_samples)
     signal = np.sin(t) + noise * rng.standard_normal(num_samples)
-    nb.log(f"Generated {num_samples} samples")
+    nb.log_text("status", f"Generated {num_samples} samples")
     return signal
 
 
@@ -22,14 +22,14 @@ def normalize(data, method: str = "standard", clip_min: float = -3.0, clip_max: 
     if method == "standard":
         data = (data - data.mean()) / (data.std() + 1e-8)
     data = np.clip(data, clip_min, clip_max)
-    nb.log(f"Normalized with method={method}")
+    nb.log_text("status", f"Normalized with method={method}")
     return data
 
 
 @nb.fn()
 def analyze(data):
     """Compute statistics on the processed data."""
-    nb.log(f"Stats: mean={data.mean():.4f}, std={data.std():.4f}")
+    nb.log_text("stats", f"Stats: mean={data.mean():.4f}, std={data.std():.4f}")
     nb.log_line("mean", float(data.mean()))
     nb.log_line("std", float(data.std()))
     return {"mean": float(data.mean()), "std": float(data.std()), "n": len(data)}

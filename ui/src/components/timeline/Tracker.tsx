@@ -4,7 +4,7 @@ import { useStreams } from '@/hooks/useStreams'
 import { useAxisTransform } from '@/hooks/useAxisTransform'
 import { useIsDesktop } from '@/hooks/useMediaQuery'
 import { StreamTree } from './StreamTree'
-import { TrackerControls } from './TrackerControls'
+import { TrackerControls, ModalityChips } from './TrackerControls'
 import { TimelineRuler, TimelineRows } from './TimelineGrid'
 import { generateTicks } from './ticks'
 import { Input } from '@/components/ui/input'
@@ -13,6 +13,9 @@ import { flattenRows, type FlatRow, type StreamModality } from '@/lib/streams'
 const HEIGHT_KEY = 'nebo_tracker_height'
 const ROW_H = 22
 const HEADER_H = 26
+// Desktop header is taller: the tree column stacks the modality chips under
+// the search field, and the ruler must match its height so rows stay aligned.
+const DESKTOP_HEADER_H = 46
 const TREE_W = 220
 const PAD = 12  // horizontal inset (px) so edge ticks/datapoints aren't clipped
 const MODALITIES: StreamModality[] = ['text', 'image', 'audio']
@@ -42,8 +45,11 @@ export function Tracker({ runId }: { runId: string }) {
   const effectiveRunId = runId?.startsWith('cmp:')
     ? comparisonGroups.get(runId)?.runIds[0] ?? runId
     : runId
-  // No stream-model work while collapsed — the rows aren't rendered.
-  const model = useStreams(effectiveRunId, !collapsed)
+  // The stream model stays computed while collapsed: step navigation
+  // (Ctrl/⌘+arrows, prev/next buttons, the step input) derives its domain
+  // from it and must keep working with the panel collapsed. The model is
+  // incrementally cached per run, so this is cheap.
+  const model = useStreams(effectiveRunId, true)
   const [touching, setTouching] = useState(false)
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(() => new Set())
   const [query, setQuery] = useState('')
@@ -225,8 +231,9 @@ export function Tracker({ runId }: { runId: string }) {
               is hidden and stream names are shown flat on the canvas instead. */}
           {isDesktop && (
             <div className="min-h-full shrink-0 border-r border-border" style={{ width: TREE_W, maxWidth: '15%' }}>
-              <div className="sticky top-0 z-10 border-b border-border bg-background p-1" style={{ height: HEADER_H }}>
+              <div className="sticky top-0 z-10 space-y-1 border-b border-border bg-background p-1" style={{ height: DESKTOP_HEADER_H }}>
                 <Input placeholder="Search streams…" value={query} onChange={e => setQuery(e.target.value)} className="h-[18px] text-[11px]" />
+                <ModalityChips activeModalities={activeModalities} onToggleModality={toggleModality} />
               </div>
               <StreamTree
                 rows={treeRows} rowHeight={ROW_H} collapsed={collapsedNodes}
@@ -251,7 +258,7 @@ export function Tracker({ runId }: { runId: string }) {
               </div>
             ) : (
               <>
-                <TimelineRuler ticks={ticks} axis={axis} isStep={isStep} minTime={minTime} height={HEADER_H} pad={PAD} playheadPct={playheadPct} />
+                <TimelineRuler ticks={ticks} axis={axis} isStep={isStep} minTime={minTime} height={isDesktop ? DESKTOP_HEADER_H : HEADER_H} pad={PAD} playheadPct={playheadPct} />
                 <TimelineRows rows={rows} rowHeight={ROW_H} isStep={isStep} axis={axis} ticks={ticks} pad={PAD} playheadPct={playheadPct} showLabels={!isDesktop} labelsDimmed={touching} />
               </>
             )}

@@ -35,7 +35,7 @@ def test_init_prints_file_banner_with_default_uri(tmp_path, monkeypatch):
     buf = io.StringIO()
     with redirect_stdout(buf):
         nb.init()
-        nb.log("trigger materialization")
+        nb.log_text("text", "trigger materialization")
     out = buf.getvalue()
     assert FILE_BANNER_RE.search(out), repr(out)
     assert RUN_ID_RE.search(out), repr(out)
@@ -51,7 +51,7 @@ def test_init_suppresses_banner_when_quiet(tmp_path, monkeypatch):
     buf = io.StringIO()
     with redirect_stdout(buf):
         nb.init()
-        nb.log("trigger materialization")
+        nb.log_text("text", "trigger materialization")
     assert "nebo:" not in buf.getvalue()
     _reset()
 
@@ -66,7 +66,7 @@ def test_no_store_disables_file_write(tmp_path, monkeypatch):
     buf = io.StringIO()
     with redirect_stdout(buf):
         nb.init()
-        nb.log("trigger materialization")
+        nb.log_text("text", "trigger materialization")
     assert "NEBO_NO_STORE=1" in buf.getvalue()
     assert not list(tmp_path.glob("**/*.nebo"))
     _reset()

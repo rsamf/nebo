@@ -25,7 +25,7 @@ raises `CacheLockedError` if another live process holds it — two daemons
 sharing one cache would duplicate history rows and clobber each other's
 watcher offsets. The kernel releases the flock on process death, so a
 crashed daemon never blocks a restart. As defense-in-depth, the history
-tables (logs, metrics, media, alerts, significant_events) carry unique
+tables (texts, metrics, media, alerts, significant_events) carry unique
 indexes over one event's identity and insert with OR IGNORE, so re-ingest
 of already-cached events is a no-op.
 """
@@ -50,7 +50,7 @@ except ImportError:  # Windows: no flock — the single-owner guard degrades
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "5"
+SCHEMA_VERSION = "6"  # v6: logs table renamed to texts, level column dropped
 
 DEFAULT_RAM_BUDGET_MB = 384
 BYTES_PER_POINT = 372  # measured: dict-per-point daemon entry overhead
@@ -76,11 +76,11 @@ CREATE TABLE metrics (
   step INTEGER, ts REAL, value_json TEXT, tags_json TEXT, colors INTEGER
 );
 CREATE INDEX idx_metrics ON metrics(run_id, loggable_id, name, step);
-CREATE TABLE logs (
+CREATE TABLE texts (
   run_id TEXT, loggable_id TEXT, name TEXT, ts REAL, step INTEGER,
-  level TEXT, message TEXT
+  message TEXT
 );
-CREATE INDEX idx_logs ON logs(run_id, ts);
+CREATE INDEX idx_texts ON texts(run_id, ts);
 CREATE TABLE alerts (run_id TEXT, ts REAL, json TEXT);
 CREATE TABLE significant_events (run_id TEXT, ts REAL, type TEXT, json TEXT);
 CREATE TABLE media (
@@ -98,9 +98,9 @@ CREATE INDEX idx_media_mid ON media(media_id);
 -- and the content-addressed media_blobs. Keys cover one event's identity;
 -- NULLs are distinct in SQLite unique indexes, so nullable columns go
 -- through COALESCE sentinels.
-CREATE UNIQUE INDEX ux_logs_row ON logs(
+CREATE UNIQUE INDEX ux_texts_row ON texts(
   run_id, COALESCE(loggable_id, ''), name, ts, COALESCE(step, -1),
-  level, message
+  message
 );
 CREATE UNIQUE INDEX ux_metrics_row ON metrics(
   run_id, loggable_id, name, COALESCE(step, -1), COALESCE(ts, -1), value_json
@@ -483,13 +483,13 @@ class RunCache:
         # a row identical to one already cached is a re-ingest by
         # construction (re-scanned file, replayed batch), never new data.
         kind = op[0]
-        if kind == "log_row":
-            _, run_id, lid, name, ts, step, level, message = op
+        if kind == "text_row":
+            _, run_id, lid, name, ts, step, message = op
             conn.execute(
-                "INSERT OR IGNORE INTO logs"
-                " (run_id, loggable_id, name, ts, step, level, message)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (run_id, lid, name, ts, step, level, message),
+                "INSERT OR IGNORE INTO texts"
+                " (run_id, loggable_id, name, ts, step, message)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (run_id, lid, name, ts, step, message),
             )
         elif kind == "metric_row":
             _, run_id, lid, name, mtype, step, ts, value_json, tags_json, colors = op
@@ -632,8 +632,8 @@ class RunCache:
             "SELECT COUNT(*) FROM loggables WHERE run_id=? AND kind='node'",
             (run_id,),
         ).fetchone()[0]
-        log_count = conn.execute(
-            "SELECT COUNT(*) FROM logs WHERE run_id=?", (run_id,)
+        text_count = conn.execute(
+            "SELECT COUNT(*) FROM texts WHERE run_id=?", (run_id,)
         ).fetchone()[0]
         series = conn.execute(
             "SELECT DISTINCT loggable_id, name FROM metrics WHERE run_id=?"
@@ -661,7 +661,7 @@ class RunCache:
             "last_event_at": row["last_event_at"],
             "node_count": node_count,
             "edge_count": len(edges),
-            "log_count": log_count,
+            "text_count": text_count,
             "run_name": row["run_name"],
             "run_config": json.loads(row["run_config_json"]) if row["run_config_json"] else {},
             "metrics_index": metrics_index,
@@ -729,20 +729,20 @@ class RunCache:
             "run_config": json.loads(row["run_config_json"]) if row["run_config_json"] else {},
         }
 
-    def get_logs(
+    def get_texts(
         self, run_id: str, loggable_id: Optional[str] = None, limit: int = 100,
     ) -> list[dict]:
         conn = self._read_conn()
         if loggable_id:
             rows = conn.execute(
-                "SELECT * FROM (SELECT rowid AS rid, * FROM logs"
+                "SELECT * FROM (SELECT rowid AS rid, * FROM texts"
                 " WHERE run_id=? AND loggable_id=?"
                 " ORDER BY rid DESC LIMIT ?) ORDER BY rid ASC",
                 (run_id, loggable_id, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM (SELECT rowid AS rid, * FROM logs WHERE run_id=?"
+                "SELECT * FROM (SELECT rowid AS rid, * FROM texts WHERE run_id=?"
                 " ORDER BY rid DESC LIMIT ?) ORDER BY rid ASC",
                 (run_id, limit),
             ).fetchall()
@@ -752,7 +752,6 @@ class RunCache:
                 "loggable_id": r["loggable_id"],
                 "name": r["name"],
                 "message": r["message"],
-                "level": r["level"],
                 "step": r["step"],
             }
             for r in rows
@@ -831,7 +830,7 @@ class RunCache:
             "exec_count": row["exec_count"] or 0,
             "is_source": bool(row["is_source"]),
             "params": json.loads(row["params_json"]) if row["params_json"] else {},
-            "recent_logs": self.get_logs(run_id, loggable_id=loggable_id, limit=20),
+            "recent_texts": self.get_texts(run_id, loggable_id=loggable_id, limit=20),
             "metrics": metrics,
             "progress": json.loads(row["progress_json"]) if row["progress_json"] else None,
         }
@@ -869,8 +868,8 @@ class RunCache:
             (run_id,),
         ).fetchone()[0]
         counts = {
-            "logs": conn.execute(
-                "SELECT COUNT(*) FROM logs WHERE run_id=?", (run_id,)
+            "texts": conn.execute(
+                "SELECT COUNT(*) FROM texts WHERE run_id=?", (run_id,)
             ).fetchone()[0],
             "metric_series": conn.execute(
                 "SELECT COUNT(DISTINCT loggable_id || '/' || name) FROM metrics"

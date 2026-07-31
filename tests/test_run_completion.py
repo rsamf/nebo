@@ -31,7 +31,7 @@ def test_run_start_payload_has_timestamp(tmp_path, monkeypatch):
     try:
         nb.init(uri=str(tmp_path / "runs"))
         # The run materializes on first emit; trigger it before flushing.
-        nb.log("trigger materialization")
+        nb.log_text("text", "trigger materialization")
         nb.get_state()._transport.flush(timeout=2.0)
     finally:
         if nb.get_state()._transport is not None:
@@ -59,7 +59,7 @@ def test_explicit_start_run_completed_carries_timestamp(tmp_path, monkeypatch):
     try:
         nb.init(uri=str(tmp_path / "runs"))
         with nb.start_run():
-            nb.log("hi")
+            nb.log_text("text", "hi")
         nb.get_state()._transport.flush(timeout=2.0)
     finally:
         if nb.get_state()._transport is not None:
@@ -93,7 +93,7 @@ ATEXIT_SCRIPT = textwrap.dedent("""
 
     import nebo as nb
     nb.init(uri="runs")
-    nb.log("hi from subprocess")
+    nb.log_text("text", "hi from subprocess")
     # No nb.start_run() — this is the implicit-run case.
     # Process exits normally; atexit must emit run_completed.
 """)
@@ -130,7 +130,7 @@ CRASH_SCRIPT = textwrap.dedent("""
 
     import nebo as nb
     nb.init(uri="runs")
-    nb.log("about to crash")
+    nb.log_text("text", "about to crash")
     raise RuntimeError("intentional crash")
 """)
 

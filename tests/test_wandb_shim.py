@@ -68,15 +68,20 @@ class TestWandbLog:
         events = client.metrics_named("loss")
         assert events[-1]["step"] == 7
 
-    def test_log_string_value_falls_back_to_log(self) -> None:
-        self._attach_client()
-        wandb.log({"note": "hello world"})
-        # Non-numeric, non-image values fall through to nb.log(), which
-        # appends to the bounded `recent_logs` deque on the global loggable.
+    def test_log_string_value_falls_back_to_log_text(self) -> None:
+        client = self._attach_client()
+        wandb.log({"note": "hello world"}, step=2)
+        # Non-numeric, non-image values fall through to nb.log_text(k, str(v)),
+        # so the key becomes the stream name and the value the message. The
+        # entry also lands on the bounded `texts` deque on the global loggable.
+        (event,) = client.by_type("text")
+        assert event["name"] == "note"
+        assert event["message"] == "hello world"
+        assert event["step"] == 2
         global_loggable = get_state().loggables["__global__"]
         assert any(
-            "note: hello world" in entry.get("message", "")
-            for entry in list(global_loggable.logs)
+            entry.get("name") == "note" and entry.get("message") == "hello world"
+            for entry in list(global_loggable.texts)
         )
 
 

@@ -13,22 +13,22 @@ Logging
 
 Nebo provides several logging functions.
 
-Text Logs
----------
+Text
+----
 
-``nb.log(message, *, name="text")`` logs a plain text message as a named stream. The ``name`` parameter (default ``"text"``) identifies the stream in the Tracker tree; passing different names creates separate streams within the same loggable. Tensor-like objects (NumPy arrays, PyTorch tensors) are auto-formatted with shape, dtype, and statistics:
+``nb.log_text(name, message, *, step=None)`` logs a text message to a named stream — text is a named payload stream like metrics and images, not a log console. The required ``name`` identifies the stream (the UI shows one card per stream name, and the stream appears in the Tracker tree); passing different names creates separate streams within the same loggable. Tensor-like objects (NumPy arrays, PyTorch tensors) are auto-formatted with shape, dtype, and statistics:
 
 .. code-block:: python
 
-    nb.log("Starting training...")
+    nb.log_text("status", "Starting training...")
     for epoch in range(10):
         loss = train_epoch(model, data)
-        nb.log(f"Epoch {epoch}: loss={loss:.4f}")
+        nb.log_text("epochs", f"Epoch {epoch}: loss={loss:.4f}")
 
 .. raw:: html
 
     <iframe
-        src="https://rsamf-nebo-demos.hf.space/?run=docs-guide-text-logs&logs"
+        src="https://rsamf-nebo-demos.hf.space/?run=docs-guide-text-logs&text"
         width="100%" height="350"
         style="margin-top: 10px; border: 1px solid var(--color-border, #e5e7eb); border-radius: 8px;"
         loading="lazy">
@@ -218,7 +218,7 @@ non-decorated helpers land on the **Global loggable**.
 
 The Global loggable appears as a distinct card at the top of the flat
 view (labelled **"List"** on mobile) and is excluded from the DAG view
-— it is not a node. Its tabs (Logs, Metrics, Images, Audio) work
+— it is not a node. Its tabs (Text, Metrics, Images, Audio) work
 identically to any node's tabs.
 
 Example:
@@ -227,7 +227,7 @@ Example:
 
     import nebo as nb
 
-    nb.log("environment looks good")           # → Global
+    nb.log_text("status", "environment looks good")   # → Global
     nb.log_line("warmup_heartbeat", 1.0)       # → Global
 
 .. raw:: html
@@ -268,13 +268,13 @@ The ``@nb.fn()`` decorator is a core primitive. It registers a function for scop
     @nb.fn()
     def load_data():
         """Load raw data."""
-        nb.log("Loading data")
+        nb.log_text("status", "Loading data")
         return [1, 2, 3]
 
     @nb.fn()
     def transform(data):
         """Transform data."""
-        nb.log(f"Transforming {len(data)} items")
+        nb.log_text("status", f"Transforming {len(data)} items")
         return [x * 2 for x in data]
 
     def run():
@@ -339,12 +339,12 @@ Some dependencies cannot be detected automatically — shared mutable state, cla
     @nb.fn()
     def setup():
         """Initialize shared resources."""
-        nb.log("Setting up")
+        nb.log_text("status", "Setting up")
 
     @nb.fn(depends_on=[setup])
     def process():
         """Uses resources initialized by setup."""
-        nb.log("Processing")
+        nb.log_text("status", "Processing")
 
 .. raw:: html
 
@@ -375,15 +375,15 @@ Decorating Classes
     @nb.fn()
     class DataPipeline:
         def load(self):
-            nb.log("Loading data")
+            nb.log_text("status", "Loading data")
             return [1, 2, 3]
 
         def transform(self, data):
-            nb.log(f"Transforming {len(data)} items")
+            nb.log_text("status", f"Transforming {len(data)} items")
             return [x * 2 for x in data]
 
         def save(self, data):
-            nb.log(f"Saving {len(data)} items")
+            nb.log_text("status", f"Saving {len(data)} items")
 
 .. raw:: html
 
@@ -398,7 +398,7 @@ In the DAG, ``DataPipeline`` appears as a transparent bounding box containing ``
 
 **Scoping rules:**
 
-- Every method gets its own scope. Logs inside ``transform()`` are scoped to ``DataPipeline.transform``.
+- Every method gets its own scope. Text and metrics logged inside ``transform()`` are scoped to ``DataPipeline.transform``.
 - Every method that runs materializes as a node, including silent methods that never call a log function — this keeps dependency chains in the DAG intact even when an intermediate method only orchestrates calls to other nodes.
 - If a method also has ``@nb.fn()`` on it, a warning is issued (the decorator is redundant).
 - A standalone ``@nb.fn()`` function called from within the class also appears inside the class group.
@@ -457,8 +457,8 @@ Per-node display hints can be set via ``@nb.fn(ui={})``. Supported keys:
 
 - ``color`` (str) — accent color for the node's badge / border.
 - ``default_tab`` (str) — which tab opens by default for the node. One of
-  ``"logs"``, ``"metrics"``, ``"images"``, ``"audio"``. The user's clicks
-  always override this preference.
+  ``"info"``, ``"text"``, ``"metrics"``, ``"images"``, ``"audio"``. The user's
+  clicks always override this preference.
 
 Unknown keys are forwarded verbatim for forward compatibility with
 future UI features.
@@ -467,7 +467,7 @@ future UI features.
 
     @nb.fn(ui={"color": "#fb923c"})
     def data_loader():
-        nb.log("Loading data")
+        nb.log_text("status", "Loading data")
         ...
 
     @nb.fn(ui={"default_tab": "metrics"})
@@ -594,9 +594,11 @@ Reorganize and document groups from the CLI (or the MCP tools):
     nebo groups doc set vision/detr README.md --file findings.md
 
 Each group holds markdown docs (``README.md`` renders first in the UI).
-Docs support ``nebo://`` deep links — ``nebo://run/<id>``,
-``nebo://run/<id>?step=<n>``, and ``nebo://group/<path>`` — that become
-clickable navigation in the web UI. Groups are a *virtual* tree over
+Docs support canonical ``nebo://`` references — ``nebo://run/<id>``,
+``nebo://run/<id>/<loggable>/<stream>``, any run form suffixed with
+``@<step>``, and ``nebo://group/<path>`` — that become clickable
+navigation in the web UI (``?step=<n>`` is still accepted as a legacy
+alias for ``@<step>``). Groups are a *virtual* tree over
 run_ids; ``.nebo`` files never move. The tree persists in
 ``<logdir>/meta/tree.json`` (outside the disposable cache, so it survives
 ``nebo cache clear``). See :doc:`the CLI reference <cli>` for every command.
@@ -626,7 +628,7 @@ up MCP:
 The tools fall into three buckets:
 
 - **Observation** — ``nebo_get_graph``, ``nebo_get_loggable_status``,
-  ``nebo_get_logs``, ``nebo_get_metrics``,
+  ``nebo_get_text``, ``nebo_get_metrics``,
   ``nebo_get_description``, ``nebo_get_run_status``,
   ``nebo_get_run_history``.
 - **Alerts & utility** — ``nebo_wait_for_alert``, ``nebo_list_alerts``,
@@ -652,7 +654,7 @@ In a Jupyter / IPython context, ``nb.show()`` returns an inline
 ``<iframe>`` pointing at the running daemon. The slice rendered is
 inferred from which kwargs you pass — there is no ``view=``
 discriminator. Pick at most one of ``metric`` / ``image`` / ``audio``
-/ ``logs`` / ``dag``; pass nothing for the full run dashboard.
+/ ``text`` / ``dag``; pass nothing for the full run dashboard.
 
 .. code-block:: python
 
@@ -662,7 +664,8 @@ discriminator. Pick at most one of ``metric`` / ``image`` / ``audio``
     nb.show(node="train")                      # single node detail
     nb.show(node="train", metric="loss")       # one metric, scoped to a node
     nb.show(metric=True)                       # gallery of all metrics
-    nb.show(logs=True)                         # logs panel
+    nb.show(text=True)                         # text panel
+    nb.show(text="status")                     # one named text stream
     nb.show(dag=True)                          # DAG only
 
 Each call maps to a URL the iframe loads — the same query-param
@@ -674,7 +677,8 @@ scheme the dashboard accepts directly:
 - ``nb.show(metric=True)`` → ``?run=<id>&metrics``
 - ``nb.show(image="hero.png")`` → ``?run=<id>&image=hero.png``
 - ``nb.show(audio=True)`` → ``?run=<id>&audios``
-- ``nb.show(logs=True)`` → ``?run=<id>&logs``
+- ``nb.show(text=True)`` → ``?run=<id>&text``
+- ``nb.show(text="status")`` → ``?run=<id>&text=status``
 - ``nb.show(dag=True)`` → ``?run=<id>&dag``
 
 When the daemon enforces auth, append ``&token=…`` to the URL — the
@@ -721,7 +725,7 @@ Connect the SDK from anywhere:
 
     @nb.fn()
     def step():
-        nb.log("hello from a remote Space")
+        nb.log_text("status", "hello from a remote Space")
         nb.log_line("loss", 0.42)
 
     step()
@@ -764,6 +768,17 @@ deployed Space. Anything that renders HTML can host a live slice:
         width="100%" height="600">
     </iframe>
 
+A canonical ``nebo://`` reference also works as an embed target via
+``?ref=…`` — a bare run ref renders the full dashboard, a loggable ref
+renders that node's card:
+
+.. code-block:: html
+
+    <iframe
+        src="https://<user>-nebo-test.hf.space/?ref=nebo://run/<id>/train"
+        width="100%" height="600">
+    </iframe>
+
 For private dashboards, append ``&token=…`` once — the dashboard
 caches it for subsequent visits.
 
@@ -801,7 +816,7 @@ Complete Example: Data Processing Pipeline
         np.random.seed(seed)
         t = np.linspace(0, 4 * np.pi, num_samples)
         signal = np.sin(t) + noise * np.random.randn(num_samples)
-        nb.log(f"Generated {num_samples} samples")
+        nb.log_text("status", f"Generated {num_samples} samples")
         return signal
 
     @nb.fn()
@@ -811,14 +826,14 @@ Complete Example: Data Processing Pipeline
         if method == "standard":
             data = (data - data.mean()) / (data.std() + 1e-8)
         data = np.clip(data, clip_min, clip_max)
-        nb.log(f"Normalized with method={method}, clipped to [{clip_min}, {clip_max}]")
+        nb.log_text("status", f"Normalized with method={method}, clipped to [{clip_min}, {clip_max}]")
         return data
 
     @nb.fn()
     def analyze(data):
         """Compute statistics on the processed data."""
         stats = {"mean": float(data.mean()), "std": float(data.std()), "n": len(data)}
-        nb.log(f"Stats: mean={stats['mean']:.4f}, std={stats['std']:.4f}")
+        nb.log_text("stats", f"Stats: mean={stats['mean']:.4f}, std={stats['std']:.4f}")
         nb.log_line("mean", stats["mean"])
         nb.log_line("std", stats["std"])
         return stats

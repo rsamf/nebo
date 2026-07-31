@@ -1,6 +1,6 @@
 # Nebo
 
-A modern logging SDK for multi-modal data. Decorate your functions with `@nb.fn()`, and nebo automatically infers a DAG from your call graph, captures logs, metrics, images, audio, and text -- all written to append-only `.nebo` files locally (tensorboard-style) and queryable in real time via CLI, MCP tools, or a web dashboard.
+A modern logging SDK for multi-modal data. Decorate your functions with `@nb.fn()`, and nebo automatically infers a DAG from your call graph, captures text, metrics, images, and audio -- all written to append-only `.nebo` files locally (tensorboard-style) and queryable in real time via CLI, MCP tools, or a web dashboard.
 
 ## Installation
 
@@ -23,7 +23,7 @@ import nebo as nb
 def load_data(path: str = "data.csv") -> list[dict]:
     """Load records from a file."""
     records = [{"id": i, "value": i * 0.5} for i in range(100)]
-    nb.log(f"Loaded {len(records)} records from {path}")
+    nb.log_text("status", f"Loaded {len(records)} records from {path}")
     return records
 
 @nb.fn()
@@ -32,7 +32,7 @@ def transform(records: list[dict]) -> list[dict]:
     out = []
     for r in nb.track(records, name="transforming"):
         out.append({**r, "value": r["value"] / 50.0})
-    nb.log(f"Transformed {len(out)} records")
+    nb.log_text("status", f"Transformed {len(out)} records")
     nb.log_line("record_count", float(len(out)))
     return out
 
@@ -41,7 +41,7 @@ def run():
     """Main pipeline entry point."""
     records = load_data()
     result = transform(records)
-    nb.log(f"Pipeline complete: {len(result)} records")
+    nb.log_text("status", f"Pipeline complete: {len(result)} records")
     return result
 
 if __name__ == "__main__":
@@ -91,11 +91,11 @@ You can use it in several ways:
 @nb.fn()
 class Agent:
     def think(self, query):
-        nb.log(f"Thinking about: {query}")
+        nb.log_text("thoughts", f"Thinking about: {query}")
         return {"plan": "respond"}
 
     def act(self, plan):
-        nb.log(f"Acting on: {plan}")
+        nb.log_text("actions", f"Acting on: {plan}")
         return "result"
 
 agent = Agent()
@@ -107,7 +107,7 @@ Methods appear as `Agent.think` and `Agent.act` in the DAG, grouped under `Agent
 
 ### Automatic Materialization
 
-Decorated functions appear in the DAG as soon as they execute for the first time — a call to `nb.log()`, `nb.log_line()`, etc. is not required. This keeps dependency chains intact when an intermediate function only orchestrates calls to other nodes without logging anything itself.
+Decorated functions appear in the DAG as soon as they execute for the first time — a call to `nb.log_text()`, `nb.log_line()`, etc. is not required. This keeps dependency chains intact when an intermediate function only orchestrates calls to other nodes without logging anything itself.
 
 ### `depends_on` -- Explicit dependency declaration
 
@@ -125,24 +125,24 @@ def process():
     ...
 ```
 
-### `nb.log(message)` -- Text logging
+### `nb.log_text(name, message)` -- Text streams
 
-Log a message to the current node. Messages appear in the terminal dashboard and are queryable via MCP tools.
+Log a text message to a named stream on the current node — text is a named payload stream like metrics and images, so `log_text` pairs a stream `name` with a `message` the way `log_line` pairs a name with a value. The UI shows one card per stream name; entries are queryable via CLI and MCP tools.
 
 ```python
 @nb.fn()
 def train(data):
-    nb.log(f"Training on {len(data)} samples")
+    nb.log_text("status", f"Training on {len(data)} samples")
     for epoch in range(10):
         loss = do_train(data)
-        nb.log(f"Epoch {epoch}: loss={loss:.4f}")
+        nb.log_text("epochs", f"Epoch {epoch}: loss={loss:.4f}")
 ```
 
 ### Typed metric helpers — `nb.log_line` / `log_bar` / `log_pie` / `log_scatter` / `log_histogram`
 
 One function per chart type. The chart type locks on first emission per `(loggable, name)` pair — reusing a name with a different `log_*` function raises `ValueError`.
 
-`log_line` is the only chart type that **accumulates** (every call appends another step). The other four are **snapshots** — re-emitting the same name overwrites the prior value, and they don't take `step` or `tags`.
+`log_line` and `log_scatter` **accumulate** (every call appends more data). `log_bar`, `log_pie`, and `log_histogram` are **snapshots** — re-emitting the same name overwrites the prior value, and they don't take `step` or `tags`.
 
 ```python
 @nb.fn()
@@ -242,13 +242,12 @@ pipeline from the shell (Ctrl+C, `kill`, `pkill`).
 nebo load .nebo/2026-04-06_143000_run-1.nebo
 ```
 
-### Check status and logs
+### Check status and text
 
 ```bash
 nebo status
-nebo logs
-nebo logs --run experiment-1 --node train --limit 50
-nebo errors --run experiment-1
+nebo text ls
+nebo text ls --run experiment-1 --node train --limit 50
 ```
 
 ### Stop the daemon
@@ -265,7 +264,7 @@ nebo mcp   # print Claude Code MCP config
 
 ## MCP Tools for AI Agents
 
-Nebo exposes 15 MCP tools for querying and controlling pipelines from an AI agent (e.g., Claude). The daemon server must be running.
+Nebo exposes 23 MCP tools for querying and controlling pipelines from an AI agent (e.g., Claude). The daemon server must be running.
 
 Each tool below is available both as a CLI subcommand (no setup) and as an
 MCP tool (for clients that prefer it). Pipeline lifecycle is deliberately
@@ -275,13 +274,12 @@ not exposed — the user launches scripts from their own shell.
 
 | CLI | MCP | Description |
 |------|------|-------------|
-| `nebo runs list` | `nebo_get_run_history` | All runs with outcomes and timestamps |
+| `nebo runs list` | `nebo_get_run_history` | All runs with timestamps, counts, and metric indexes |
 | `nebo runs show <id>` | `nebo_get_run_status` | One run's summary + `metrics_index` |
 | `nebo graph show` | `nebo_get_graph` | Full DAG: nodes, edges, execution counts |
-| `nebo loggables show <id>` | `nebo_get_loggable_status` | One loggable: logs, metrics, errors, params |
-| `nebo logs` | `nebo_get_logs` | Log entries, filterable by loggable and run |
+| `nebo loggables show <id>` | `nebo_get_loggable_status` | One loggable: text, metrics, params |
+| `nebo text ls` | `nebo_get_text` | Text entries, filterable by loggable and run |
 | `nebo metrics get <loggable>` | `nebo_get_metrics` | Metric series with `--tag` / `--step` filters |
-| `nebo errors` | `nebo_get_errors` | All errors with full tracebacks |
 | `nebo describe` | `nebo_get_description` | Workflow description + node docstrings |
 
 ### Utility & Write Tools
@@ -291,7 +289,7 @@ not exposed — the user launches scripts from their own shell.
 | `nebo load <file>` | `nebo_load_file` | Load a `.nebo` file into the daemon |
 | `nebo runs wait <id>` | `nebo_wait_for_alert` | Block until `nb.alert(...)` fires |
 | `nebo metrics log --entries-json '[...]'` | `nebo_log_metric` | Push derived metrics (defaults to `__agent__`) |
-| `nebo text log --entries-json '[...]'` | `nebo_log_text` | Push text log entries |
+| `nebo text log --entries-json '[...]'` | `nebo_log_text` | Push text entries |
 | `nebo images log --entries-json '[...]'` | `nebo_log_image` | Push images by `path` / `url` / `data` |
 | `nebo audio log --entries-json '[...]'` | `nebo_log_audio` | Push audio recordings |
 
@@ -304,7 +302,7 @@ Runs are persisted as `.nebo` binary files using MessagePack serialization. Each
 ```
 +----------------+     +------------------+     +------------------+
 |  Your Python   |---->|    Nebo SDK      |---->|  Daemon Server   |
-|   Pipeline     |     |  (@fn, log,      |     |  (FastAPI,       |
+|   Pipeline     |     |  (@fn, log_text, |     |  (FastAPI,       |
 |                |     |   track, ...)    |     |   port 7861)     |
 +----------------+     +--------+---------+     +--------+---------+
                                 |                        |
@@ -332,11 +330,11 @@ Two execution modes:
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `fn` | `@fn()`, `@fn(depends_on=[...])`, `@fn(ui={...})` | Register a function/class as a DAG node |
-| `log` | `log(message: str)` | Log a text message |
+| `log_text` | `log_text(name, message, *, step=None)` | Log a text message to a named stream |
 | `log_line` | `log_line(name, value, *, step=None, tags=None)` | Log a scalar line-chart datapoint |
 | `log_bar` | `log_bar(name, value)` | Bar-chart snapshot (`{label: number}`); overwrites |
 | `log_pie` | `log_pie(name, value)` | Pie-chart snapshot (`{label: number}`); overwrites |
-| `log_scatter` | `log_scatter(name, value, *, colors=False)` | Labeled scatter snapshot (`{label: list[(x, y)]}`); overwrites |
+| `log_scatter` | `log_scatter(name, value, *, step=None, tags=None, colors=False)` | Labeled scatter (`{label: list[(x, y)]}`); accumulates |
 | `log_histogram` | `log_histogram(name, value, *, colors=False)` | Labeled histogram snapshot (`{label: list[number]}`); overwrites |
 | `log_cfg` | `log_cfg(cfg: dict)` | Log node configuration |
 | `log_image` | `log_image(image, *, name=None, step=None, points=None, boxes=None, circles=None, polygons=None, bitmasks=None)` | Log an image (label kwargs accept `nb.labels.<Class>` instances or lists of them) |
@@ -345,7 +343,7 @@ Two execution modes:
 | `track` | `track(iterable, name=None, total=None)` | Progress tracking |
 | `md` | `md(description: str)` | Set workflow description |
 | `ui` | `ui(layout, view, collapsed, minimap, theme)` | Set run-level UI defaults |
-| `init` | `init(port, host, mode, terminal, dag_strategy, flush_interval, store)` | Manual initialization |
+| `init` | `init(uri, dag_strategy, flush_interval, api_token, group, ...)` | Manual initialization |
 | `get_state` | `get_state() -> SessionState` | Access the global state singleton |
 
 ## Recent changes

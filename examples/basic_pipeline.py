@@ -3,7 +3,7 @@
 Demonstrates:
 - @nb.fn() decorator with automatic DAG edge inference
 - Automatic source node detection (in-degree 0)
-- nb.log() for text logging
+- nb.log_text() for named text streams
 - nb.track() for progress tracking
 - nb.md() for workflow-level documentation
 Key concept: DAG edges are inferred when one @fn function calls another
@@ -27,7 +27,7 @@ def clean_text(documents: list[dict]) -> list[dict]:
         }
         cleaned.append(cleaned_doc)
         time.sleep(0.3)
-    nb.log(f"Cleaned {len(cleaned)} documents")
+    nb.log_text("status", f"Cleaned {len(cleaned)} documents")
     return cleaned
 
 
@@ -45,7 +45,7 @@ def extract_keywords(documents: list[dict]) -> list[dict]:
             "keyword_count": len(found),
         }
         results.append(result)
-        nb.log(f"Found {len(found)} keywords in {doc['path']}")
+        nb.log_text("keywords", f"Found {len(found)} keywords in {doc['path']}")
         time.sleep(0.3)
     return results
 
@@ -57,7 +57,7 @@ def summarize(results: list[dict]) -> str:
     summary = (
         f"Processed {len(results)} documents, found {total_keywords} total keywords."
     )
-    nb.log(summary)
+    nb.log_text("summary", summary)
     return summary
 
 
@@ -77,7 +77,7 @@ def run_pipeline(file_paths: list[str]) -> str:
             "size": len(path) * 100,
         }
         documents.append(doc)
-        nb.log(f"Loaded document: {path} ({doc['size']} bytes)")
+        nb.log_text("status", f"Loaded document: {path} ({doc['size']} bytes)")
         time.sleep(0.3)
 
     # Pipeline: each call creates a DAG edge from run_pipeline → callee
@@ -93,7 +93,7 @@ def main():
 
     # Emitted outside any @nb.fn() — lands on the Global loggable and
     # appears inline with node rows in the terminal display.
-    nb.log("pipeline starting")
+    nb.log_text("status", "pipeline starting")
 
     # Describe the workflow for AI agents
     nb.md(

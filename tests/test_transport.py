@@ -40,8 +40,8 @@ def test_file_transport_satisfies_protocol(tmp_path):
 def test_file_transport_writes_header_and_events(tmp_path):
     t = FileTransport(logdir=tmp_path, run_id="abc123def456", script_path="/x/s.py")
     try:
-        t.send_event({"type": "log", "loggable_id": "__global__", "message": "hi"})
-        t.send_event({"type": "log", "loggable_id": "__global__", "message": "bye"})
+        t.send_event({"type": "text", "loggable_id": "__global__", "message": "hi"})
+        t.send_event({"type": "text", "loggable_id": "__global__", "message": "bye"})
         assert t.flush(timeout=2.0)
     finally:
         t.close()
@@ -57,12 +57,12 @@ def test_file_transport_writes_header_and_events(tmp_path):
         assert meta["script_path"] == "/x/s.py"
         entries = list(reader.read_entries())
 
-    log_msgs = [
+    text_msgs = [
         e["payload"].get("message")
         for e in entries
-        if e["type"] == "log"
+        if e["type"] == "text"
     ]
-    assert log_msgs == ["hi", "bye"]
+    assert text_msgs == ["hi", "bye"]
 
 
 def test_file_transport_seeds_global_and_agent_loggables(tmp_path):
@@ -109,9 +109,9 @@ def test_file_transport_rolls_on_new_run(tmp_path, monkeypatch):
     try:
         nb.init(uri=str(tmp_path / "runs"))
         with nb.start_run() as r1:
-            nb.log("first run log")
+            nb.log_text("text", "first run log")
         with nb.start_run() as r2:
-            nb.log("second run log")
+            nb.log_text("text", "second run log")
         nb.flush(timeout=2.0)
     finally:
         state = nb.get_state()
@@ -189,7 +189,7 @@ def test_file_transport_writes_media_bytes(tmp_path):
 def test_file_transport_flush_means_on_disk(tmp_path):
     t = FileTransport(logdir=tmp_path, run_id="flushcheck01", script_path="/x/s.py")
     try:
-        t.send_event({"type": "log", "loggable_id": "__global__", "message": "x"})
+        t.send_event({"type": "text", "loggable_id": "__global__", "message": "x"})
         assert t.flush(timeout=2.0)
         # Without closing, another reader must already see the entry.
         (path,) = tmp_path.glob("*.nebo")
@@ -199,7 +199,7 @@ def test_file_transport_flush_means_on_disk(tmp_path):
             msgs = [
                 e["payload"].get("message")
                 for e in reader.read_entries()
-                if e["type"] == "log"
+                if e["type"] == "text"
             ]
         assert "x" in msgs
     finally:
@@ -230,11 +230,11 @@ def test_file_transport_close_drains_slow_encode_backlog(tmp_path, monkeypatch):
     t = FileTransport(logdir=tmp_path, run_id="slowencode01", script_path="/x/s.py")
     n = 300
     for i in range(n):
-        t.send_event({"type": "log", "loggable_id": "__global__", "message": f"m{i}"})
+        t.send_event({"type": "text", "loggable_id": "__global__", "message": f"m{i}"})
     t.close()
 
     (path,) = tmp_path.glob("*.nebo")
-    msgs = [e["payload"].get("message") for e in _read_entries(path) if e["type"] == "log"]
+    msgs = [e["payload"].get("message") for e in _read_entries(path) if e["type"] == "text"]
     assert len(msgs) == n, f"close() truncated the backlog: {len(msgs)}/{n} written"
 
 
@@ -254,13 +254,13 @@ def test_file_transport_close_sync_drains_when_worker_dead(tmp_path):
         t._running = True
         t._thread = dead
 
-        t._queue.put({"type": "log", "loggable_id": "__global__", "message": "orphan1"})
-        t._queue.put({"type": "log", "loggable_id": "__global__", "message": "orphan2"})
+        t._queue.put({"type": "text", "loggable_id": "__global__", "message": "orphan1"})
+        t._queue.put({"type": "text", "loggable_id": "__global__", "message": "orphan2"})
     finally:
         t.close()
 
     (path,) = tmp_path.glob("*.nebo")
-    msgs = [e["payload"].get("message") for e in _read_entries(path) if e["type"] == "log"]
+    msgs = [e["payload"].get("message") for e in _read_entries(path) if e["type"] == "text"]
     assert msgs == ["orphan1", "orphan2"]
 
 
@@ -276,14 +276,14 @@ def test_file_transport_atexit_drains_after_context_exit(tmp_path):
     assert t.flush(timeout=5.0)
     t._run_completed_sent = True
     # Events after the with-block, then process exit.
-    t.send_event({"type": "log", "loggable_id": "__global__", "message": "tail"})
+    t.send_event({"type": "text", "loggable_id": "__global__", "message": "tail"})
     t._emit_run_completed_atexit()
 
     assert not t._running, "atexit must close the transport"
     (path,) = tmp_path.glob("*.nebo")
     entries = _read_entries(path)
     completed = [e for e in entries if e["type"] == "run_completed"]
-    msgs = [e["payload"].get("message") for e in entries if e["type"] == "log"]
+    msgs = [e["payload"].get("message") for e in entries if e["type"] == "text"]
     assert len(completed) == 1, "run_completed must not be duplicated"
     assert msgs == ["tail"], "post-block events must be drained at exit"
 

@@ -1,14 +1,18 @@
 import { useEffect, useState } from 'react'
+import { parseRef } from '@/lib/refs'
 
 /**
  * Embedded ("iframe-friendly") view kinds. The kind is inferred from
  * which URL params are present — there is no `view=` discriminator:
  *
+ *   ?ref=nebo://run/<id>[/<loggable>[/<name>]]  → canonical-reference form
+ *                              (bare run ref → 'run'; loggable ref → 'node')
  *   ?run=X                   → 'run'    (full DAG + timeline)
  *   ?run=X&dag               → 'dag'    (graph only)
  *   ?run=X&flat              → 'flat'   (loggable cards; same as desktop flat view)
  *   ?run=X&node=Y            → 'node'   (single node detail)
- *   ?run=X&logs              → 'logs'   (logs panel; &node=Y filters)
+ *   ?run=X&text              → 'text'   (text panel; &node=Y filters)
+ *   ?run=X&text=NAME         → 'text'   (single named text stream)
  *   ?run=X&metrics           → 'metrics' (metrics gallery; &node=Y filters)
  *   ?run=X&metric=NAME       → 'metric'  (single metric; &node=Y filters)
  *   ?run=X&images            → 'images'
@@ -21,7 +25,7 @@ export type EmbeddedKind =
   | 'dag'
   | 'flat'
   | 'node'
-  | 'logs'
+  | 'text'
   | 'metrics'
   | 'metric'
   | 'images'
@@ -43,6 +47,21 @@ export interface EmbeddedView {
 function parse(): EmbeddedView | null {
   if (typeof window === 'undefined') return null
   const params = new URLSearchParams(window.location.search)
+
+  // Canonical-reference form: `?ref=nebo://run/<id>[/<loggable>[/<name>]]`.
+  // Maps onto the param kinds: a bare run ref → the run dashboard, a
+  // loggable (with or without a stream name) → the node detail card.
+  // Group refs have no embed rendering.
+  const refRaw = params.get('ref')
+  if (refRaw) {
+    const ref = parseRef(refRaw)
+    if (ref?.kind === 'run') {
+      if (ref.loggableId) return { kind: 'node', runId: ref.runId, nodeRef: ref.loggableId, name: ref.name }
+      return { kind: 'run', runId: ref.runId, nodeRef: null, name: null }
+    }
+    return null
+  }
+
   const runId = params.get('run')
   if (!runId) return null
 
@@ -56,13 +75,17 @@ function parse(): EmbeddedView | null {
   const audio = params.get('audio')
   if (audio) return { kind: 'audio', runId, nodeRef, name: audio }
 
+  // Text: `?text` (bare) shows the panel, `?text=NAME` one named stream.
+  if (params.has('text')) {
+    return { kind: 'text', runId, nodeRef, name: params.get('text') || null }
+  }
+
   // Plural-flag kinds: presence of the key (any value, including empty)
   // activates the gallery / panel. Order matters only for stable kind
   // selection when callers accidentally combine flags.
   if (params.has('metrics')) return { kind: 'metrics', runId, nodeRef, name: null }
   if (params.has('images')) return { kind: 'images', runId, nodeRef, name: null }
   if (params.has('audios')) return { kind: 'audios', runId, nodeRef, name: null }
-  if (params.has('logs')) return { kind: 'logs', runId, nodeRef, name: null }
   if (params.has('dag')) return { kind: 'dag', runId, nodeRef, name: null }
   if (params.has('flat')) return { kind: 'flat', runId, nodeRef, name: null }
 
@@ -114,8 +137,9 @@ interface EmbeddedUrlSpec {
   metric?: string
   image?: string
   audio?: string
+  // Text: `true` → the whole text panel; a string → one named stream.
+  text?: string | boolean
   // Panel-style slice (no single item).
-  logs?: boolean
   dag?: boolean
   flat?: boolean
 }
@@ -131,7 +155,8 @@ export function buildEmbeddedUrl(spec: EmbeddedUrlSpec): string {
   if (spec.metric) params.set('metric', spec.metric)
   if (spec.image) params.set('image', spec.image)
   if (spec.audio) params.set('audio', spec.audio)
-  if (spec.logs) params.set('logs', '')
+  if (typeof spec.text === 'string') params.set('text', spec.text)
+  else if (spec.text) params.set('text', '')
   if (spec.dag) params.set('dag', '')
   if (spec.flat) params.set('flat', '')
   if (spec.node) params.set('node', spec.node)

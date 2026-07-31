@@ -153,7 +153,7 @@ def log(data: dict, step: Optional[int] = None, commit: bool = True) -> None:
     Each key/value is dispatched by value type:
       - numeric → ``nb.log_line`` (line chart)
       - image-like (numpy 2D/3D, PIL Image) → ``nb.log_image``
-      - other → cast to float if possible, else logged via ``nb.log``
+      - other → cast to float if possible, else logged via ``nb.log_text``
 
     The ``commit`` kwarg is accepted for API parity but ignored — every call
     is a single emission.
@@ -173,7 +173,7 @@ def log(data: dict, step: Optional[int] = None, commit: bool = True) -> None:
         try:
             nb.log_line(k, float(v), step=step)
         except (TypeError, ValueError):
-            nb.log(f"{k}: {v}")
+            nb.log_text(k, str(v), step=step)
 
 
 def finish(exit_code: int = 0, *, quiet: Optional[bool] = None) -> None:

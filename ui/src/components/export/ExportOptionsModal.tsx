@@ -163,7 +163,7 @@ export function ExportOptionsModal({ open, onClose, runId }: ExportOptionsModalP
             </Row>
             <Row
               label="Entries per node"
-              hint="Cap on logs / images / charts / audio shown in each node."
+              hint="Cap on text / images / charts / audio shown in each node."
               disabled={options.tabbedContent === 'none'}
             >
               <input

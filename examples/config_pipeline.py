@@ -12,9 +12,8 @@ Demonstrates two complementary ways to surface configuration:
 
 Also shown:
 - ``@nb.fn()`` to register pipeline steps
-- ``nb.log()`` for text and tensor-like object logging
+- ``nb.log_text()`` for text and tensor-like object logging
 - Multiple source nodes and branching DAG
-- Error capture with enriched tracebacks
 """
 
 import time
@@ -61,8 +60,8 @@ def generate_data(num_samples: int, noise_level: float, seed: int) -> np.ndarray
     np.random.seed(seed)
     t = np.linspace(0, 4 * np.pi, num_samples)
     signal = np.sin(t) + noise_level * np.random.randn(num_samples)
-    nb.log(f"Generated {num_samples} samples with noise_level={noise_level}, seed={seed}")
-    nb.log(signal)
+    nb.log_text("status", f"Generated {num_samples} samples with noise_level={noise_level}, seed={seed}")
+    nb.log_text("signal", signal)
     time.sleep(0.5)
     return signal
 
@@ -75,8 +74,8 @@ def generate_metadata(num_samples: int, seed: int) -> dict:
     labels = np.random.choice(["A", "B", "C"], size=num_samples)
     timestamps = np.arange(num_samples, dtype=np.float64)
     metadata = {"labels": labels, "timestamps": timestamps}
-    nb.log(f"Generated metadata for {num_samples} samples")
-    nb.log(labels)
+    nb.log_text("status", f"Generated metadata for {num_samples} samples")
+    nb.log_text("labels", labels)
     time.sleep(0.5)
     return metadata
 
@@ -93,18 +92,18 @@ def normalize_data(
     if method == "standard":
         mean, std = data.mean(), data.std()
         normalized = (data - mean) / (std + 1e-8)
-        nb.log(f"Standard normalization: mean={mean:.4f}, std={std:.4f}")
+        nb.log_text("status", f"Standard normalization: mean={mean:.4f}, std={std:.4f}")
     elif method == "minmax":
         dmin, dmax = data.min(), data.max()
         normalized = (data - dmin) / (dmax - dmin + 1e-8)
-        nb.log(f"MinMax normalization: min={dmin:.4f}, max={dmax:.4f}")
+        nb.log_text("status", f"MinMax normalization: min={dmin:.4f}, max={dmax:.4f}")
     else:
         normalized = data
-        nb.log(f"No normalization (unknown method: {method})")
+        nb.log_text("status", f"No normalization (unknown method: {method})")
 
     clipped = np.clip(normalized, clip_min, clip_max)
-    nb.log(f"Clipped to [{clip_min}, {clip_max}]")
-    nb.log(clipped)
+    nb.log_text("status", f"Clipped to [{clip_min}, {clip_max}]")
+    nb.log_text("normalized", clipped)
     time.sleep(0.5)
     return clipped
 
@@ -115,8 +114,8 @@ def filter_by_label(data: np.ndarray, metadata: dict, label: str) -> np.ndarray:
     nb.log_cfg({"label": label})
     mask = metadata["labels"] == label
     filtered = data[mask]
-    nb.log(f"Filtered to label='{label}': {mask.sum()}/{len(data)} samples")
-    nb.log(filtered)
+    nb.log_text("status", f"Filtered to label='{label}': {mask.sum()}/{len(data)} samples")
+    nb.log_text("filtered", filtered)
     time.sleep(0.5)
     return filtered
 
@@ -146,10 +145,11 @@ def compute_statistics(
     else:
         stats["top_k_values"] = sorted(data.tolist(), key=abs, reverse=True)
 
-    nb.log(f"Statistics: mean={stats['mean']:.4f}, std={stats['std']:.4f}, "
-           f"{stats['above_threshold']}/{stats['count']} above threshold={threshold}")
+    nb.log_text("stats", f"Statistics: mean={stats['mean']:.4f}, std={stats['std']:.4f}, "
+                         f"{stats['above_threshold']}/{stats['count']} above threshold={threshold}")
 
-    nb.log(
+    nb.log_text(
+        "stats",
         f"Statistical Summary — "
         f"samples={stats['count']}, "
         f"mean={stats['mean']:.4f}, std={stats['std']:.4f}, "
@@ -177,7 +177,7 @@ def generate_report(all_stats: dict, filtered_stats: dict) -> str:
         f"Top-K values (filtered): {[f'{v:.2f}' for v in filtered_stats['top_k_values'][:3]]}",
     ]
     report = "\n".join(report_lines)
-    nb.log(report)
+    nb.log_text("report", report)
     time.sleep(0.5)
     return report
 

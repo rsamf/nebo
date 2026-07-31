@@ -18,7 +18,7 @@ type ScatterPoint = { x: number; y: number; step: number | null }
 // accumulates: every emission contributes more points to the same plot,
 // each point tagged with the emission's step. The chart shows the union
 // of all points across entries; clicking a point sets the global step
-// filter so the rest of the UI (logs, images, audio) narrows to that
+// filter so the rest of the UI (text, images, audio) narrows to that
 // moment in the run.
 //
 // `colors=false` (default) draws every series in the run color and lets

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import { useContextMenu } from '@/hooks/useContextMenu'
 import { useStore } from '@/store'
@@ -16,9 +16,6 @@ interface RunCardProps {
 }
 
 export function RunCard({ run, selected, onClick, depth = 0 }: RunCardProps) {
-  const scriptName = run.script_path.split('/').pop() ?? run.script_path
-  const customName = useStore(s => s.runNames.get(run.id))
-  const setRunName = useStore(s => s.setRunName)
   const getOrAssignRunColor = useStore(s => s.getOrAssignRunColor)
   const runColor = useStore(s => s.runColors.get(run.id))
   const isSelectedForCompare = useStore(s => s.selectedForCompare.has(run.id))
@@ -34,42 +31,16 @@ export function RunCard({ run, selected, onClick, depth = 0 }: RunCardProps) {
   }, [comparisonActive, selectedRunId, comparisonGroups, run.id])
   const contextMenu = useContextMenu()
 
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  const displayName = runDisplayName(run, customName)
-
-  const startEditing = useCallback(() => {
-    setDraft(displayName)
-    setEditing(true)
-  }, [displayName])
-
-  const commitEdit = useCallback(() => {
-    setEditing(false)
-    const trimmed = draft.trim()
-    if (trimmed && trimmed !== scriptName) {
-      setRunName(run.id, trimmed)
-    } else if (!trimmed || trimmed === scriptName) {
-      setRunName(run.id, '') // clear custom name, revert to default
-    }
-  }, [draft, scriptName, run.id, setRunName])
+  const displayName = runDisplayName(run)
 
   useEffect(() => {
     getOrAssignRunColor(run.id)
   }, [run.id, getOrAssignRunColor])
 
-  useEffect(() => {
-    if (editing && inputRef.current) {
-      inputRef.current.focus()
-      inputRef.current.select()
-    }
-  }, [editing])
-
   return (
     <RunHoverInfo runId={run.id} side="right">
-      {/* div with button semantics instead of <button>: the row can host
-          interactive children (the rename input), and buttons can't nest. */}
+      {/* div with button semantics instead of <button>: the row hosts the
+          context menu as an interactive child, and buttons can't nest. */}
       <div
         role="button"
         tabIndex={0}
@@ -98,28 +69,7 @@ export function RunCard({ run, selected, onClick, depth = 0 }: RunCardProps) {
             style={{ background: runColor ?? 'transparent' }}
           />
         </span>
-        {editing ? (
-          <input
-            ref={inputRef}
-            value={draft}
-            onChange={e => setDraft(e.target.value)}
-            onBlur={commitEdit}
-            onKeyDown={e => {
-              if (e.key === 'Enter') commitEdit()
-              if (e.key === 'Escape') setEditing(false)
-            }}
-            onClick={e => e.stopPropagation()}
-            className="min-w-0 flex-1 text-xs bg-background border border-border rounded px-1 py-0 outline-none focus:ring-1 focus:ring-ring"
-          />
-        ) : (
-          <span
-            className="min-w-0 flex-1 truncate cursor-text"
-            onDoubleClick={(e) => { e.stopPropagation(); startEditing() }}
-            title="Double-click to rename"
-          >
-            {displayName}
-          </span>
-        )}
+        <span className="min-w-0 flex-1 truncate">{displayName}</span>
         {isSelectedForCompare && (
           <span className="ml-auto h-2 w-2 shrink-0 rounded-full bg-primary" title="Selected for compare" />
         )}

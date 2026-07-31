@@ -8,7 +8,7 @@ subcommands:
 
 * **Server & admin** — start/stop the daemon, manage its cache, install
   agent skills, deploy to a Hugging Face Space.
-* **Agent-callable Q&A and writes** — read runs, logs, metrics, and the
+* **Agent-callable Q&A and writes** — read runs, text, metrics, and the
   DAG from a running daemon, manage alert rules, and push new entries
   into a run. These are the same commands the shipped agent skills use.
 
@@ -401,9 +401,11 @@ env var; reorganize afterward from here. Each group can hold markdown docs
 {run_id: group}}`` (runs absent from ``runs`` are at the root).
 ``groups rm`` refuses if the group still has member runs or subgroups —
 move them out first (nebo has no run deletion). Group docs support
-``nebo://run/<id>``, ``nebo://run/<id>?step=<n>``, and
-``nebo://group/<path>`` deep links that the web UI turns into clickable
-navigation.
+canonical ``nebo://`` references — ``nebo://run/<id>``,
+``nebo://run/<id>/<loggable>/<stream>``, any run form suffixed with
+``@<step>``, and ``nebo://group/<path>`` — that the web UI turns into
+clickable navigation (``?step=<n>`` is still accepted as a legacy
+alias).
 
 nebo graph
 ==========
@@ -421,7 +423,8 @@ nebo loggables
 
 .. option:: show <loggable_id> [--run <run_id>]
 
-    Show a loggable's status: metadata, recent logs, metrics, progress.
+    Show a loggable's status: metadata, recent text entries, metrics,
+    progress.
     Loggables are ``@nb.fn`` node ids (function qualnames), plus the
     implicit ``__global__`` and ``__agent__`` loggables.
 
@@ -437,22 +440,24 @@ docstrings.
 
     Run id (latest if omitted).
 
-nebo logs
-=========
+nebo text (read)
+================
 
-.. program:: nebo logs
+.. program:: nebo text ls
 
-.. option:: --run <run_id>
+.. code-block:: bash
 
-    Run ID (latest if omitted).
+    nebo text ls
+    nebo text ls --run run_1748_0 --node train --limit 50
 
-.. option:: --node <loggable_id>
+.. option:: ls [--run <run_id>] [--node <loggable_id>] [--limit <n>]
 
-    Filter to one loggable.
+    List text entries, newest last. Human output prints one line per
+    entry as ``[loggable_id] name@step: message``.
 
-.. option:: --limit <n>
-
-    Maximum entries to return (default: ``100``).
+    * ``--run`` — run ID (latest if omitted).
+    * ``--node`` — filter to one loggable.
+    * ``--limit`` — maximum entries to return (default: ``100``).
 
 nebo metrics (read)
 ===================
@@ -569,7 +574,7 @@ nebo text / images / audio log
 
 .. code-block:: bash
 
-    nebo text log --entries-json '[{"message": "analysis complete"}]'
+    nebo text log --entries-json '[{"name": "analysis", "message": "analysis complete"}]'
     nebo images log --entries-json '[{"name": "annotated", "path": "./out.png"}]'
     nebo audio log --entries-json '[{"name": "sample", "path": "./clip.wav", "sr": 22050}]'
 
@@ -577,7 +582,7 @@ nebo text / images / audio log
 
     JSON list of entries.
 
-    * **text**: ``{loggable_id?, message, name?, level?, step?}``
+    * **text**: ``{loggable_id?, name?, message, step?}``
     * **images**: ``{loggable_id?, name, path? | url? | data?, step?,
       labels?}`` — exactly one of ``path`` (local file, read and
       encoded by the CLI), ``url`` (fetched server-side), or ``data``

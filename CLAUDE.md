@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Nebo is a modern logging SDK for multi-modal data. Users decorate functions with `@nb.fn()` and emit events with `nb.log()` (text; optional `name=` param, default `"text"`), `nb.log_line` / `log_bar` / `log_pie` / `log_scatter` / `log_histogram` (one helper per chart type), `nb.log_image` (with `nb.labels.{Points, Boxes, Circles, Polygons, Bitmasks}` overlays), `nb.log_audio`, `nb.log_cfg`, `nb.alert`, and `nb.track()`. Nebo infers a DAG from the call graph and surfaces everything through append-only `.nebo` files, a FastAPI daemon, a React web UI, and MCP tools. The repo contains the Python package (`nebo/`), the web UI (`ui/`), tests (`tests/`), docs (`docs/`), and runnable examples (`examples/`).
+Nebo is a modern logging SDK for multi-modal data. Users decorate functions with `@nb.fn()` and emit events with `nb.log_text(name, message, *, step=None)` (named text streams — name is a required first positional, exactly like the metric helpers; there is no level/severity; `nb.log(message, *, name=None, step=None)` survives only as a deprecated forwarding shim — old argument order, one-time FutureWarning, slated for removal — the sole backwards-compat exception in the codebase), `nb.log_line` / `log_bar` / `log_pie` / `log_scatter` / `log_histogram` (one helper per chart type), `nb.log_image` (with `nb.labels.{Points, Boxes, Circles, Polygons, Bitmasks}` overlays), `nb.log_audio`, `nb.log_cfg`, `nb.alert`, and `nb.track()`. Nebo infers a DAG from the call graph and surfaces everything through append-only `.nebo` files, a FastAPI daemon, a React web UI, and MCP tools. The repo contains the Python package (`nebo/`), the web UI (`ui/`), tests (`tests/`), docs (`docs/`), and runnable examples (`examples/`).
 
 Nebo is a **logging** SDK — it does not run human-in-the-loop interactive features (no `nb.ask`, no pauseable nodes). Anything that needs to block on user input belongs outside the SDK.
 
@@ -27,7 +27,7 @@ uv run python examples/basic_pipeline.py   # run a pipeline (SDK auto-connects t
 ```bash
 cd ui
 npm install
-npm run dev      # Vite dev server, proxies /health /events /runs /graph /logs /nodes /stream → localhost:7861
+npm run dev      # Vite dev server, proxies /health /events /runs /graph /text /nodes /resolve /stream → localhost:7861
 npm run build    # tsc -b && vite build
 npm run lint     # eslint
 ```
@@ -162,12 +162,30 @@ writes stay synchronous; the cache interaction is a `queue.put`.
   each other's `watch_files` offsets. `nebo serve` pre-probes the lock
   (`cache_lock_holder`) for a friendly error naming the holder pid. The
   kernel drops a flock on process death, so crashes never wedge a restart.
-- **Idempotent history inserts**: `logs`/`metrics`/`media`/`alerts`/
+- **Idempotent history inserts**: `texts`/`metrics`/`media`/`alerts`/
   `significant_events` carry unique indexes over one event's identity
   (COALESCE sentinels for nullable step/ts — NULLs are distinct in SQLite
   unique indexes) and insert with `OR IGNORE`, so re-ingesting
   already-cached events (re-scanned file, replayed batch) is a no-op —
   matching the upsert semantics of `runs`/`loggables`/`media_blobs`.
+- **Read-path decimation**: `GET /runs/{id}/metrics?points=N` (default
+  2000, `points=0` = full) caps accumulating series server-side —
+  min/max-per-bucket for line (spikes survive), uniform stride for
+  scatter — annotating each series with `total_points`/`downsampled`
+  (`daemon.py:downsample_series`, never mutates RAM state). The UI
+  hydrates in two phases: the decimated default paints charts
+  immediately, then a `points=0` fetch delivers **every** datapoint and
+  replaces the series (users always end up with full data). The per-chart
+  "N of M pts" badge and the run-level "loading history…" hint
+  (`hydratingRuns`) only show during that window; CLI/MCP read via the
+  loggable endpoint and stay full-fidelity.
+- **Deep-ingest never floods**: `ingest_events(..., broadcast=False)` is
+  used by the watcher's deepen catch-up (a file's whole history — browsers
+  hydrate via REST instead); live tailing (`_read_appended`) still
+  broadcasts. Ingest also slices batches (~1000 events) and releases the
+  lock + yields between slices so a 111 MB catch-up can't starve other
+  requests. The UI store pools accumulating-metric appends per series per
+  WS batch (one spread each, not one per event).
 - **Escape hatches**: `--no-cache` (pure-RAM daemon, janitor disabled) and
   `--cache-path`. A `DaemonState()` constructed directly (tests) has
   `cache=None` and behaves exactly like the pre-cache daemon. Stale cache
@@ -220,22 +238,66 @@ seed). Group docs are real markdown files under `meta/docs/<group-path>/`.
 - **Surfaces**: CLI `nebo tree` / `groups add|ls|mv|rm` / `groups doc
   ls|get|set|rm` / `runs mv`; MCP `nebo_get_tree` / `nebo_{create,move,delete}_group`
   / `nebo_move_run` / `nebo_{get,set}_group_doc`. Group docs support `nebo://`
-  deep links (`nebo://run/<id>?step=<n>`, `nebo://group/<path>`) that the UI
-  intercepts. Agents are the primary doc authors — the skills carry the
-  what/why/how/findings curation contract.
+  deep links that the UI intercepts. Agents are the primary doc authors — the
+  skills carry the what/why/how/findings curation contract.
+
+### Canonical `nebo://` references
+
+Every resource has a canonical, unambiguous ID (`nebo/core/refs.py` +
+`ui/src/lib/refs.ts` — twin parsers, keep in lockstep):
+`nebo://run/<run_id>[/<loggable_id>[/<name...>]][@<step>]` and
+`nebo://group/<path>`. The loggable segment is always exactly one path
+segment (`__global__`, `__agent__`, or a node's qualname id — dots, never
+slashes); everything after it is the stream name, which may contain `/`.
+`@<step>` addresses a datapoint; `?step=N` is a legacy alias. Consumers:
+markdown deep links (`NeboMarkdown` → `store.navigateNebo`), iframe embeds
+(`?ref=<uri>`), and the daemon's `GET /resolve?ref=` (parsed components +
+`exists`).
+
+**Deep-link navigation is deterministic** — a link naming a loggable or
+stream must never depend on which view/tab the user happened to leave open.
+`navigateNebo` selects the run, applies `@step`, forces `viewMode: 'flat'`
+(every loggable has a card there; the DAG may not show it), and sets
+`pendingNavTarget: {loggableId, name}`. Both flat surfaces then land it the
+same way — switch to the container that owns the card, drop any filter that
+would hide it, scroll it into view, and flash it for 3 s (`motion/react`
+box-shadow ring):
+
+- **Desktop** `LoggableGridView` resolves against its built `tabs`
+  structure (`resolveNavTarget`), switches tab, clears the search box and
+  section chip. Anchors: `card-<cardId>` on every card, plus the older
+  `loggable-card-<loggableId>` on each loggable's first card (that one is
+  the tracker's stream-selection target).
+- **Mobile** `MobileFeed` resolves against run state, sets the type-filter
+  segment (text → Text, metric → Metrics, image/audio → Media), clears a
+  stage chip pinned to another loggable. Anchor: `mcard-<cardId>` where
+  cardId is the feed's own `t|m|i|a:<loggableId>:<name>` key.
+  `MobileRunView` closes its sheets on a pending target, since a link can
+  be followed from the notes markdown inside one.
+
+`lib/navTarget.ts` holds the shared `NAV_MODALITY_ORDER`
+(text→metric→image→audio) both resolvers key off, so the two can't drift on
+which container owns a name; desktop derives its `TAB_ORDER` from it. Both
+effects run with no dep array and retry per render because the target's
+data may still be hydrating, and every state write happens inside their rAF
+callback, never synchronously in the effect body.
 - **UI is read-only** for the tree (no write-access model for UI users): the
   sidebar renders a collapsible group tree (`ui/src/components/runs/RunTree.tsx`)
   over the store's `runTree` slice (`{groups, runs}`), hydrated from `GET /tree`
-  and replaced wholesale on `tree_updated`. A group page
-  (`components/layout/GroupPage.tsx`, shown when `selectedGroup` is set) renders
-  the group's docs (README first) then member runs. `nebo://` links are handled
-  by `components/shared/NeboMarkdown.tsx` (a `urlTransform` that passes `nebo:`
-  through the v10 sanitizer + a custom `a` renderer → `store.navigateNebo`).
-  Reorganization happens through the CLI/MCP, never the UI.
+  and replaced wholesale on `tree_updated`. Desktop has **no group page**:
+  clicking a group only toggles its collapse, and its markdown docs are tree
+  leaves — clicking one opens the dedicated viewer
+  (`components/layout/DocViewer.tsx`, store key `selectedDoc`) in place of the
+  run detail view. A `nebo://group/...` link expands the group (+ ancestors)
+  in the tree. Mobile keeps its group page (`MobileGroupPage`, `selectedGroup`).
+  `nebo://` links are handled by `components/shared/NeboMarkdown.tsx` (a
+  `urlTransform` that passes `nebo:` through the v10 sanitizer + a custom `a`
+  renderer → `store.navigateNebo`). Reorganization happens through the
+  CLI/MCP, never the UI.
 
 ### DAG inference
 
-Edges are inferred at runtime, not declared. `nebo/core/decorators.py` wraps every `@nb.fn()` call; `nebo/core/dag.py` and `nebo/core/state.py` track which node produced each return value (`return_origins`) and which node is currently on the call stack. When a wrapped callee receives an argument that was produced by another node, a data-flow edge is added; otherwise the edge falls back to the calling parent. `depends_on=[...]` declares edges that can't be inferred (shared state, globals, class attrs). `dag_strategy` switches between `object` (data-flow, default), `stack` (caller→callee only), `both`, `linear` (chain nodes in first-execution order), or `none`.
+Edges are inferred at runtime, not declared. `nebo/core/decorators.py` wraps every `@nb.fn()` call; `nebo/core/dag.py` and `nebo/core/state.py` track which node produced each return value (`return_origins`) and which node is currently on the call stack. Node ids are qualnames and must be **unique**: two different functions that would decorate to the same id (e.g. top-level `step()` in two modules) don't merge — `_resolve_node_id` module-qualifies the newcomer (`pkg_b.eval.step`, `#N` suffix for same-module duplicates) with a one-time warning. When a wrapped callee receives an argument that was produced by another node, a data-flow edge is added; otherwise the edge falls back to the calling parent. `depends_on=[...]` declares edges that can't be inferred (shared state, globals, class attrs). `dag_strategy` switches between `object` (data-flow, default), `stack` (caller→callee only), `both`, `linear` (chain nodes in first-execution order), or `none`.
 
 ### .nebo format v4 + transport coalescing
 
@@ -251,6 +313,10 @@ Edges are inferred at runtime, not declared. `nebo/core/decorators.py` wraps eve
   `event["data"]` (msgpack bin on disk, ~25% smaller). Base64 exists only at
   the JSON wire boundary (`NetworkTransport._jsonable`); the daemon accepts
   both str and bytes.
+- **Text entries write as `text` (code 9).** The legacy spelling `log`
+  (code 0) stays in `ENTRY_TYPES` read-side and every ingest path
+  normalizes `log` → `text`, so older files decode unchanged. No level
+  field exists anywhere in the text pipeline.
 
 Batching happens in the **transports**, not the logger: both flush loops
 drain their queue per tick and run `coalesce()` (`nebo/core/coalesce.py`) —
@@ -333,12 +399,12 @@ Step/tags only flow on the wire for accumulating types (line, scatter). `_emit_m
 
 Step filter: clicking a datapoint on a line or scatter chart sets `timeline.step` (and auto-flips `timeline.mode` to `'step'`) via the chart's `onClick`. `useTimelineFilter` (`src/hooks/useTimelineFilter.ts`) then narrows logs/images/audio panels to entries whose `step` matches; metric charts ignore the entry-level filter and instead mark the active step inline (LineMetric draws a vertical guideline + value bubble via an inline chart.js plugin; ScatterMetric dims non-matching points). **Don't filter metric entries by step at the parent level** (e.g. in `LoggableGridView.MetricCardBody`) — doing so collapses the chart and breaks the in-chart highlight.
 
-**Tracker (bottom panel).** The bottom of the UI is the **Tracker** — a full-width, resizable and collapsible panel that replaces the old timeline scrubber. It is built around **streams**: a stream is a named series of datapoints within a loggable. Full stream paths are `/<func_name>/<name>` for `@nb.fn` nodes, `/agent/<name>` for the `__agent__` loggable, and `/<name>` (root) for the global loggable. `nb.log()` entries are streams named `"text"` by default (or whatever `name=` was passed). Names split on `/` to form a searchable tree. Key sub-components (`ui/src/components/timeline/`):
+**Tracker (bottom panel).** The bottom of the UI is the **Tracker** — a full-width, resizable and collapsible panel that replaces the old timeline scrubber. It is built around **streams**: a stream is a named series of datapoints within a loggable. Full stream paths are `/<func_name>/<name>` for `@nb.fn` nodes, `/agent/<name>` for the `__agent__` loggable, and `/<name>` (root) for the global loggable. `nb.log_text` entries appear under their required stream name. Names split on `/` to form a searchable tree. Key sub-components (`ui/src/components/timeline/`):
 
-- `StreamTree.tsx` — desktop-only left pane: a searchable `/`-delimited tree of text/image/audio streams (metrics are NOT in the tree), capped at 15% of the tracker width. Clicking a leaf highlights it (`timeline.selectedStream`) and scrolls the main view to that loggable's card — it does **not** filter the content panels. On mobile the tree is hidden and each stream's full path is drawn left-aligned on its canvas row instead (dimmed to 30% while the user is touching the canvas).
-- `TrackerControls.tsx` — Step/Time mode dropdown, numeric step input, prev/next step arrows (also Ctrl/⌘+Left/Right), a **Reset zoom** icon button, a **Clear all filters** button, and modality chips (text/image/audio). No play/pause. Below 768px these fold into a single **Filters** popover (which also holds the stream search).
-- `TimelineGrid.tsx` — per-stream datapoint rows with a single playhead for both step and time modes (time mode is a single playhead, not the old two-handle range). Left-drag scrubs the playhead; **zoom is ctrl/⌘+wheel (trackpad pinch)**, pan is middle-drag or shift/horizontal wheel, and a plain vertical wheel scrolls the row list. A constant horizontal pad keeps the first/last tick and edge datapoints from clipping; the playhead carries a downward triangle handle. `ticks.ts` holds the tick-generation helper.
-- `Tracker.tsx` — top-level shell that owns the single shared vertical scroll (so the tree column and canvas render one flattened row list at matching heights and scroll together, staying row-aligned), plus collapse/search state, drag-to-resize, the collapse toggle, and the mobile flat-label rendering.
+- `StreamTree.tsx` — desktop-only left pane: a searchable `/`-delimited tree of text/image/audio streams (metrics are NOT in the tree), capped at 15% of the tracker width. Its sticky header stacks the stream search field and the modality chips (text/image/audio) — both hidden while the tracker is collapsed; the ruler matches the taller desktop header height so rows stay aligned. Clicking a leaf highlights it (`timeline.selectedStream`) and scrolls the main view to that loggable's card — it does **not** filter the content panels. On mobile the tree is hidden and each stream's full path is drawn left-aligned on its canvas row instead (dimmed to 30% while the user is touching the canvas).
+- `TrackerControls.tsx` — Step/Time mode dropdown, numeric step input, prev/next step arrows (also Ctrl/⌘+Left/Right), a **Reset zoom** icon button, and a **Clear all filters** button. No play/pause. Below 768px these fold into a single **Filters** popover (which holds the stream search + modality chips on mobile; `ModalityChips` is the shared component).
+- `TimelineGrid.tsx` — per-stream datapoint rows with a single playhead for both step and time modes (time mode is a single playhead, not the old two-handle range). Collapsing a tree branch does NOT drop its dots: the collapsed branch row renders every visible descendant leaf's datapoints merged (per-dot modality colors via `FlatRow.mergedLeaves`). A branch that is itself a stream (`/a/b` logged alongside `/a/b/c`) renders its own datapoints on the branch row. Left-drag scrubs the playhead; **zoom is ctrl/⌘+wheel (trackpad pinch)**, pan is middle-drag or shift/horizontal wheel, and a plain vertical wheel scrolls the row list. A constant horizontal pad keeps the first/last tick and edge datapoints from clipping; the playhead carries a downward triangle handle. `ticks.ts` holds the tick-generation helper.
+- `Tracker.tsx` — top-level shell that owns the single shared vertical scroll (so the tree column and canvas render one flattened row list at matching heights and scroll together, staying row-aligned), plus collapse/search state, drag-to-resize, the collapse toggle, and the mobile flat-label rendering. Invariant: `useStreams(id, true)` stays enabled while collapsed — step navigation (Ctrl/⌘+arrows, prev/next, the step input) derives its domain from the stream model and must keep working with the panel collapsed.
 
 Supporting modules: `ui/src/lib/streams.ts` (stream path + tree-flatten helpers), `ui/src/hooks/useStreams.ts` (stream data hook), `ui/src/hooks/useAxisTransform.ts` (zoom/pan math via a native non-passive wheel listener). The store `timeline` slice is `{ mode, step, time, selectedStream }`.
 
@@ -403,21 +469,25 @@ Smoothed values are rendered, not persisted: raw entries in the store remain unt
 
 ### Package layout
 
-- `nebo/core/` — decorators, DAG builder, session state, `DaemonClient`, config, tracker, `.nebo` file format, `groups.py` (`validate_group_path` — shared SDK/daemon group-path validation).
+- `nebo/core/` — decorators, DAG builder, session state, `DaemonClient`, config, tracker, `.nebo` file format, `groups.py` (`validate_group_path` — shared SDK/daemon group-path validation), `refs.py` (`parse_ref`/`format_ref` for canonical `nebo://` references; TS twin at `ui/src/lib/refs.ts` — keep in lockstep).
 - `nebo/logging/` — user-facing `log`/`log_line`/`log_bar`/`log_pie`/`log_scatter`/`log_histogram`/`log_image`/`log_audio`/`md`, plus the serializer/queue that batches events to the daemon.
 - `nebo/labels.py` — public dataclasses (`Points`, `Boxes`, `Circles`, `Polygons`, `Bitmasks`) for `nb.log_image` overlays. Re-exported as `nb.labels`.
 - `nebo/server/` — `daemon.py` (FastAPI app, created via `create_daemon_app` factory), `cache.py` (`RunCache` write-behind SQLite cache, `MediaLRU`, `media_id_for`, cache-path/sweep helpers), `watcher.py` (directory watcher with persisted offsets + shallow header-only registration), `tree.py` (`TreeStore` — run-tree groups/placements/docs over `meta/tree.json`), `runner.py` (vestigial subprocess manager), `protocol.py` (`MessageType` enum + `decode_batch`).
-- `nebo/mcp/` — MCP tools (`tools.py`) and stdio/server entry points. Split into observation (graph, logs, metrics, description, run summary/history), alerts (`wait_for_alert`, `list_alerts`, `set_alert`, `delete_alert`), utility (`load_file`), and write (`log_metric/text/image/audio`). Run lifecycle is NOT exposed — pipelines start/stop via the user's shell.
+- `nebo/mcp/` — MCP tools (`tools.py`) and stdio/server entry points. Split into observation (graph, text, metrics, description, run summary/history — `nebo_get_text`), alerts (`wait_for_alert`, `list_alerts`, `set_alert`, `delete_alert`), utility (`load_file`), and write (`log_metric/text/image/audio` — `nebo_log_text` entries are `{run_id?, loggable_id?, name?, message, step?}`). Run lifecycle is NOT exposed — pipelines start/stop via the user's shell.
 - `nebo/client.py` — single HTTP client shared by `nebo/mcp/tools.py` and `nebo/cli.py`. Owns all daemon-bound `urllib` traffic; resolves `--url`/`--port`/`--api-token` from kwargs → `NEBO_URL`/`NEBO_PORT`/`NEBO_API_TOKEN` → defaults.
 - `nebo/core/transport.py` — `Transport` Protocol shared by the two SDK transports. `FileTransport` (this module) writes append-only `.nebo` files in file mode; `NetworkTransport` (in `nebo/core/client.py`) POSTs events to a daemon in network mode.
 - `nebo/cli.py` — subcommands split into two groups:
   - **Server/admin:** `serve`, `cache ls|clear`, `status`, `stop`, `mcp`, `mcp-stdio`, `skill`, `deploy`. PID file at `~/.nebo/server.pid`.
-  - **Agent-callable Q&A:** `runs list|show|wait`, `graph show`, `loggables show`, `describe`, `logs`, `metrics list|get|log`, `alerts ls|get|set|rm`, `text|images|audio log`, `load`. Each takes `--url`/`--port`/`--api-token`/`--json` via the shared `_common_conn_parser()` and routes through `nebo/client.py`. `metrics get` supports `--values-only` (emit just the entries array; requires `--name`) and `--runs R1,R2` (client-side cross-run fan-out).
+  - **Agent-callable Q&A:** `runs list|show|wait`, `graph show`, `loggables show`, `describe`, `metrics list|get|log`, `alerts ls|get|set|rm`, `text ls|log`, `images|audio log`, `load`. Each takes `--url`/`--port`/`--api-token`/`--json` via the shared `_common_conn_parser()` and routes through `nebo/client.py`. `metrics get` supports `--values-only` (emit just the entries array; requires `--name`) and `--runs R1,R2` (client-side cross-run fan-out). There is no `nebo logs` — text reads are `nebo text ls`.
 - `nebo/extras/cv/` — optional computer-vision helpers. `nebo/extensions/` — extension hook point.
 
 ### Web UI (`ui/`)
 
 React 19 + Vite 7 + TypeScript + Tailwind v4 + shadcn-style components. State via `zustand` (`src/store/index.ts`). WebSocket handled in `src/hooks/useWebSocket.ts`, connecting to the daemon's `/stream` endpoint. Graph rendering uses `@xyflow/react` with `@dagrejs/dagre` layout (`src/components/graph/DagGraph.tsx`). Metrics charts use **Chart.js 4** (registered in `src/components/charts/registerChartJs.ts`) with `chartjs-plugin-zoom` for pan/zoom; the shared lifecycle hook is `src/components/charts/useChartJs.ts`. The bottom panel is the **Tracker** (`src/components/timeline/`); see "Tracker" under the Metrics model section. The default view is "Flat" (store key `'flat'`, wire value `nb.ui(view="flat")`); the DAG view is opt-in. The `@/` import alias maps to `ui/src/`. shadcn registry is configured via `.mcp.json` (the `shadcn` MCP server).
+
+Desktop specifics: the DAG defaults to a **horizontal** layout (`dagDirection: 'LR'`; mobile's canvas hardcodes top-to-bottom), there is no pane context menu (DAG⇄Flat switching is the header tabs only), and edges are always solid — no liveness animation. Flat-view cards are ≥380px wide × 360px tall (`LoggableGridView`). The run tooltip (`RunHoverInfo`) shows only run id + start time (node/metric counts read 0 for shallow runs). There is **no client-side run rename** — display names resolve `run_name` → script basename (`runDisplayName`). The top bar shows `<group path>/<run name> <run id> <date>` only. A run's markdown and config live in the **right panel** (`layout/RightPanel.tsx`): three tabs — Markdown, Config (full recursive structured view, not chips), Settings — open by default (`rightPanelOpen: true`), resizable by dragging its left edge (width persisted to localStorage). There is no `DescriptionOverlay` and no top-bar markdown button.
+
+**Text display**: text streams render like metrics/images — one card per stream name (`NodeText.tsx`'s `TextBlock`), in the node **Text** tab, the flat view's per-name text cards, and mobile per-name `TextFeedCard`s. Each entry mirrors `NodeImages`'s `ImageItem` exactly: one header row (`<name>  step N · timestamp` on the left, `HeaderActions` — expand + copy-iframe-URL — on the right) with the message underneath at `font-mono text-sm`. `TextBlock` deliberately has **no** block-level header: entries label themselves the way image items do, so the stream name isn't printed twice. There is no level UI and no message-content search anywhere (the tracker's stream search matches stream *paths*, not content). Embeds: `?text` (panel) / `?text=NAME` (one stream).
 
 **Mobile experience** (`src/components/mobile/`, <768px via `useIsDesktop`): a dedicated touch UI rendered by `MobileApp` from App.tsx's mobile branch — the desktop layout is untouched. Screens: `MobileRunList` (uniform cards; group tap opens the group page; the search field segues to a flat search screen) → `MobileRunView` (header: group crumb / title → `MobileRunInfoSheet` with notes + config + copyable identifiers; bell → `MobileAlertsSheet`, severity-filterable, tap jumps to the node sheet; gear → `MobileSettingsSheet` sliders over the shared `Settings` keys). Body toggles DAG ⇄ Feed via the shared `viewMode` store key ('graph'/'flat', so `nb.ui(view=)` still applies): `MobileDagCanvas` is a custom dagre + pan/pinch canvas (not ReactFlow; no explicit `setPointerCapture` — it would retarget the derived click and swallow node taps), `MobileFeed` is a stage-rail + type-filter card feed whose expanded charts reuse `SingleRunChart` (exported from `NodeMetrics`). `MobileTracker` renders the persistent heat-strip bar + scrub sheet over `useStreams`. Node taps and alerts open `MobileNodeSheet`, which wraps the desktop `LoggableTabContainer` for full tab parity. Store invariant: **every run mutator clones the run object** (`runs.set(id, { ...run, field })` — see the comment above `setRuns`), so `s.runs.get(id)` selectors are sound and fire only for that run; never mutate a stored run in place. Components that read one slice should select the leaf field (`s.runs.get(id)?.logs`) so unrelated mutations don't re-render them. Phone-width embeds (`?run=`, `&dag`, `&flat`) render the mobile layout via `EmbeddedMobileLayout`.
 
@@ -436,6 +506,6 @@ Plain `pytest` + `pytest-asyncio`. Tests are self-contained and exercise the pub
 - **No error reporting, period.** `@nb.fn()` lets exceptions propagate untouched — no error event, no excepthook. There is no `error` event type anywhere: incoming `error` wire events are silently ignored by the daemon, entry code 6 is retired in the file format, and there are no error read paths (no `/errors`, no `nebo errors`, no UI error panel). Don't reintroduce any of it.
 - **`MessageType` is the source of truth for protocol events.** Add new event kinds to `nebo/server/protocol.py` and handle them in the daemon, not ad-hoc strings.
 - **The Global loggable is always present.** `SessionState.loggables["__global__"]` is seeded on init/reset/clear. `nb.log*` calls outside any `@nb.fn()` context route there. Any code that iterates loggables and assumes node-only fields (`func_name`, `exec_count`, etc.) must filter by `isinstance(l, NodeInfo)` or `kind == "node"`.
-- **`@nb.fn(ui={})` keys.** Production code reads `color` and `default_tab`. `default_tab` values are `"info"` / `"logs"` / `"metrics"` / `"images"` / `"audio"` (no `"ask"` — that tab was removed along with `nb.ask`). Unknown keys are forwarded to the UI verbatim so adding a new hint requires only a UI consumer, no SDK change.
+- **`@nb.fn(ui={})` keys.** Production code reads `color` and `default_tab`. `default_tab` values are `"info"` / `"text"` / `"metrics"` / `"images"` / `"audio"` (no `"ask"` — that tab was removed along with `nb.ask`; `"logs"` was renamed to `"text"`). Unknown keys are forwarded to the UI verbatim so adding a new hint requires only a UI consumer, no SDK change.
 - **No interactive blocking from the SDK.** `nb.ask` and pauseable nodes are intentionally absent — the SDK is for logging, not orchestration. Don't reintroduce wire-level events that block the running pipeline; if a feature needs that, it belongs outside nebo.
 - **`nb.log_image` only takes `nb.labels.*` instances.** Raw lists/tensors raise a `TypeError`. The kwarg names are `points`, `boxes`, `circles`, `polygons`, `bitmasks` (note plural for the last). Each kwarg accepts one instance or a list of them — don't reintroduce a "single raw geometry" path.

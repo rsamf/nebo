@@ -44,7 +44,7 @@ def test_ui_inside_live_run_stores_and_emits(capturing_client):
     """nb.ui() with a live run keeps today's behavior: state + wire event."""
     from nebo.core.state import get_state
 
-    nb.log("materialize")
+    nb.log_text("text", "materialize")
     nb.ui(layout="horizontal", theme="dark")
 
     state = get_state()
@@ -60,7 +60,7 @@ def test_fn_ui_parameter(reset_state):
 
     @nb.fn(ui={"color": "#34d399"})
     def my_func():
-        nb.log("hello")
+        nb.log_text("text", "hello")
 
     my_func()
 

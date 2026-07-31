@@ -6,7 +6,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { MobileApp } from '@/components/mobile/MobileApp'
 import { RunDetailView } from '@/components/layout/RunDetailView'
-import { GroupPage } from '@/components/layout/GroupPage'
+import { DocViewer } from '@/components/layout/DocViewer'
 import { RightPanel } from '@/components/layout/RightPanel'
 import { Notice } from '@/components/shared/Notice'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -21,7 +21,7 @@ export default function App() {
   useWebSocket()
   const isDesktop = useIsDesktop()
   const selectedRunId = useStore(s => s.selectedRunId)
-  const selectedGroup = useStore(s => s.selectedGroup)
+  const selectedDoc = useStore(s => s.selectedDoc)
   const reconnecting = useStore(s => s.reconnecting)
   const connected = useStore(s => s.connected)
   const rightPanelOpen = useStore(s => s.rightPanelOpen)
@@ -76,16 +76,14 @@ export default function App() {
               <ErrorBoundary label="Sidebar"><Sidebar /></ErrorBoundary>
             </div>
             <div className="flex-1 overflow-hidden">
-              {selectedGroup ? (
-                <ErrorBoundary label="GroupPage"><GroupPage path={selectedGroup} /></ErrorBoundary>
+              {selectedDoc ? (
+                <ErrorBoundary label="DocViewer"><DocViewer doc={selectedDoc} /></ErrorBoundary>
               ) : (
                 <ErrorBoundary label="RunDetailView"><RunDetailView /></ErrorBoundary>
               )}
             </div>
             {selectedRunId && rightPanelOpen && (
-              <div className="w-80 shrink-0 overflow-hidden">
-                <ErrorBoundary label="RightPanel"><RightPanel runId={selectedRunId} /></ErrorBoundary>
-              </div>
+              <ErrorBoundary label="RightPanel"><RightPanel runId={selectedRunId} /></ErrorBoundary>
             )}
           </div>
           {selectedRunId && (

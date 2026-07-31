@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from nebo.server.daemon import DaemonState, Run, LoggableState, LogEntry
+from nebo.server.daemon import DaemonState, Run, LoggableState, TextEntry
 
 
 class TestDaemonState:
@@ -128,33 +128,49 @@ class TestDaemonEventIngestion:
         assert graph["nodes"]["plain"]["ui_hints"] is None
 
     @pytest.mark.asyncio
-    async def test_ingest_log(self) -> None:
-        """Should append log entries."""
+    async def test_ingest_text(self) -> None:
+        """Should append text entries."""
         self.state.create_run("s.py", run_id="r1")
         await self.state.ingest_events([
             {"type": "loggable_register", "data": {"loggable_id": "n1", "func_name": "n1"}},
-            {"type": "log", "loggable_id": "n1", "message": "hello world"},
+            {"type": "text", "loggable_id": "n1", "message": "hello world"},
         ], "r1")
         run = self.state.runs["r1"]
-        assert len(run.logs) == 1
-        assert run.logs[0].message == "hello world"
+        assert len(run.texts) == 1
+        assert run.texts[0].message == "hello world"
 
     @pytest.mark.asyncio
-    async def test_log_event_name_round_trips(self) -> None:
-        """Text-log events carry a stream name; absent name defaults to 'text'."""
+    async def test_text_event_name_round_trips(self) -> None:
+        """Text events carry a stream name; absent name defaults to 'text'."""
         self.state.create_run("s.py", run_id="r1")
         await self.state.ingest_events([
-            {"type": "log", "loggable_id": "__global__", "name": "status", "message": "hi"},
-            {"type": "log", "loggable_id": "__global__", "message": "no-name"},
+            {"type": "text", "loggable_id": "__global__", "name": "status", "message": "hi"},
+            {"type": "text", "loggable_id": "__global__", "message": "no-name"},
         ], "r1")
         run = self.state.runs["r1"]
-        assert run.logs[0].name == "status"
-        assert run.logs[1].name == "text"
+        assert run.texts[0].name == "status"
+        assert run.texts[1].name == "text"
+
+    @pytest.mark.asyncio
+    async def test_legacy_log_event_normalizes_to_text(self) -> None:
+        """Pre-rename wire events spelled {"type": "log"} still ingest —
+        _process_event normalizes them to "text" up front (load-bearing
+        back-compat for old SDKs and old .nebo files)."""
+        self.state.create_run("s.py", run_id="r1")
+        await self.state.ingest_events([
+            {"type": "log", "loggable_id": "__global__", "message": "hi",
+             "name": "status"},
+        ], "r1")
+        run = self.state.runs["r1"]
+        assert len(run.texts) == 1
+        assert isinstance(run.texts[0], TextEntry)
+        assert run.texts[0].name == "status"
+        assert run.texts[0].message == "hi"
 
     @pytest.mark.asyncio
     async def test_metric_before_register_is_not_dropped(self) -> None:
         """A metric whose loggable_register hasn't arrived yet (e.g. after a
-        daemon restart mid-run) must be kept, not silently dropped — logs
+        daemon restart mid-run) must be kept, not silently dropped — texts
         already always append, so the two should be symmetric."""
         self.state.create_run("s.py", run_id="r1")
         await self.state.ingest_events([
@@ -279,7 +295,7 @@ class TestDaemonEventIngestion:
     async def test_ingest_creates_implicit_run(self) -> None:
         """Should create an implicit run if none exists."""
         await self.state.ingest_events([
-            {"type": "log", "message": "orphan log"},
+            {"type": "text", "message": "orphan text"},
         ])
         assert len(self.state.runs) == 1
 
@@ -412,14 +428,14 @@ class TestRunSummary:
             [{"type": "run_start", "data": {"script_path": "s.py"}}],
             run_id="r1",
         )
-        run.loggables["__global__"].logs.append({"message": "marker"})
+        run.loggables["__global__"].texts.append({"message": "marker"})
         await state.ingest_events(
             [{"type": "run_start", "data": {"script_path": "s.py"}}],
             run_id="r1",
         )
         assert any(
             entry.get("message") == "marker"
-            for entry in run.loggables["__global__"].logs
+            for entry in run.loggables["__global__"].texts
         )
 
 
@@ -599,14 +615,14 @@ class TestApiTokenAuth:
     def test_default_write_private_rejects_without_token(self, monkeypatch) -> None:
         # POST without a token fails because the default is private write.
         client, _ = self._app(monkeypatch, token="s3cret")
-        resp = client.post("/events", json=[{"type": "log", "message": "x"}])
+        resp = client.post("/events", json=[{"type": "text", "message": "x"}])
         assert resp.status_code == 401
 
     def test_default_write_accepts_token_header(self, monkeypatch) -> None:
         client, _ = self._app(monkeypatch, token="s3cret")
         resp = client.post(
             "/events",
-            json=[{"type": "log", "message": "x"}],
+            json=[{"type": "text", "message": "x"}],
             headers={"X-Nebo-Token": "s3cret"},
         )
         assert resp.status_code == 200
@@ -617,7 +633,7 @@ class TestApiTokenAuth:
         client, _ = self._app(monkeypatch, token="s3cret")
         resp = client.post(
             "/events?token=s3cret",
-            json=[{"type": "log", "message": "x"}],
+            json=[{"type": "text", "message": "x"}],
         )
         assert resp.status_code == 200
 
@@ -636,7 +652,7 @@ class TestApiTokenAuth:
 
     def test_write_public_accepts_post_without_token(self, monkeypatch) -> None:
         client, _ = self._app(monkeypatch, token="s3cret", write="public")
-        resp = client.post("/events", json=[{"type": "log", "message": "x"}])
+        resp = client.post("/events", json=[{"type": "text", "message": "x"}])
         assert resp.status_code == 200
 
     # ── No token at all → both gates open (preserves local dev) ──
@@ -644,7 +660,7 @@ class TestApiTokenAuth:
     def test_unset_token_leaves_routes_open(self, monkeypatch) -> None:
         client, _ = self._app(monkeypatch)
         assert client.get("/runs").status_code == 200
-        resp = client.post("/events", json=[{"type": "log", "message": "x"}])
+        resp = client.post("/events", json=[{"type": "text", "message": "x"}])
         assert resp.status_code == 200
 
 
@@ -880,16 +896,16 @@ def test_alerts_wait_respects_min_level():
     assert result["body"]["status"] == "timeout"
 
 
-class TestOfflineTextLogsReachUI:
-    """Text logs must survive into the projection and the REST snapshot the
+class TestOfflineTextReachesUI:
+    """Text entries must survive into the projection and the REST snapshot the
     UI hydrates from on a cold page open — i.e. when no WebSocket client was
     connected while the run was emitting.
 
-    Regression guard for "text logs don't appear in the UI unless I was
+    Regression guard for "text entries don't appear in the UI unless I was
     actively viewing the page while the run was ongoing." The live UI path
-    streams logs over the WebSocket; the offline path relies entirely on
-    GET /runs/{id}/logs. These assert the offline path is complete for both
-    node-scoped and __global__ logs, including logs interleaved with metrics
+    streams text over the WebSocket; the offline path relies entirely on
+    GET /runs/{id}/text. These assert the offline path is complete for both
+    node-scoped and __global__ text, including entries interleaved with metrics
     and ingested incrementally (the network-mode wire shape).
     """
 
@@ -910,43 +926,44 @@ class TestOfflineTextLogsReachUI:
              "data": {"loggable_id": "step", "func_name": "step", "kind": "node"}},
         ])
         client.post(f"/events?run_id={rid}", json=[
-            {"type": "log", "loggable_id": "step", "message": "node log A", "step": 0},
+            {"type": "text", "loggable_id": "step", "message": "node log A", "step": 0},
         ])
         client.post(f"/events?run_id={rid}", json=[
             {"type": "metric", "loggable_id": "step", "name": "loss",
              "metric_type": "line", "value": 1.0, "step": 0},
         ])
         client.post(f"/events?run_id={rid}", json=[
-            {"type": "log", "loggable_id": "__global__", "message": "global log B"},
+            {"type": "text", "loggable_id": "__global__", "message": "global log B"},
         ])
         client.post(f"/events?run_id={rid}", json=[
-            {"type": "log", "loggable_id": "step", "message": "node log C", "step": 1},
+            {"type": "text", "loggable_id": "step", "message": "node log C", "step": 1},
         ])
         return client, rid
 
-    def test_offline_logs_in_rest_snapshot(self) -> None:
+    def test_offline_texts_in_rest_snapshot(self) -> None:
         client, rid = self._offline_client()
-        body = client.get(f"/runs/{rid}/logs?limit=500").json()
-        messages = [l["message"] for l in body["logs"]]
+        body = client.get(f"/runs/{rid}/text?limit=500").json()
+        messages = [l["message"] for l in body["texts"]]
         assert messages == ["node log A", "global log B", "node log C"], messages
 
-    def test_offline_global_logs_present(self) -> None:
-        """Logs emitted outside any @nb.fn (the __global__ loggable) must be
+    def test_offline_global_texts_present(self) -> None:
+        """Text emitted outside any @nb.fn (the __global__ loggable) must be
         retrievable — this is the common shape for metric-only ML runs."""
         client, rid = self._offline_client()
-        body = client.get(f"/runs/{rid}/logs?limit=500").json()
-        global_logs = [l for l in body["logs"] if l["loggable_id"] == "__global__"]
-        assert [l["message"] for l in global_logs] == ["global log B"]
+        body = client.get(f"/runs/{rid}/text?limit=500").json()
+        global_texts = [l for l in body["texts"] if l["loggable_id"] == "__global__"]
+        assert [l["message"] for l in global_texts] == ["global log B"]
 
-    def test_offline_log_count_in_summary(self) -> None:
+    def test_offline_text_count_in_summary(self) -> None:
         client, rid = self._offline_client()
         summary = client.get(f"/runs/{rid}").json()
-        assert summary["log_count"] == 3
+        assert summary["text_count"] == 3
 
-    def test_offline_logs_keep_step_for_timeline_filter(self) -> None:
-        """`nb.log(msg, step=i)` must round-trip its step through the offline
-        REST path so the UI's step-filter (entry.step === clicked metric step)
-        can match logs to a clicked chart datapoint after the run finishes.
+    def test_offline_texts_keep_step_for_timeline_filter(self) -> None:
+        """`nb.log_text(name, msg, step=i)` must round-trip its step through the
+        offline REST path so the UI's step-filter (entry.step === clicked metric
+        step) can match text entries to a clicked chart datapoint after the run
+        finishes.
         """
         from fastapi.testclient import TestClient
         from nebo.server.daemon import DaemonState, create_daemon_app
@@ -961,21 +978,21 @@ class TestOfflineTextLogsReachUI:
         ])
         for i in range(4):
             client.post(f"/events?run_id={rid}", json=[
-                {"type": "log", "loggable_id": "step", "message": f"log {i}", "step": i},
+                {"type": "text", "loggable_id": "step", "message": f"log {i}", "step": i},
                 {"type": "metric", "loggable_id": "step", "name": "loss",
                  "metric_type": "line", "value": 1.0 / (i + 1), "step": i},
             ])
 
-        logs = client.get(f"/runs/{rid}/logs?limit=500").json()["logs"]
-        assert [(l["message"], l["step"]) for l in logs] == [
+        texts = client.get(f"/runs/{rid}/text?limit=500").json()["texts"]
+        assert [(l["message"], l["step"]) for l in texts] == [
             ("log 0", 0), ("log 1", 1), ("log 2", 2), ("log 3", 3),
         ]
         # The metric entries carry the same steps the chart exposes on click.
         series = client.get(f"/runs/{rid}/metrics").json()["metrics"]["step"]["loss"]
         assert [e["step"] for e in series["entries"]] == [0, 1, 2, 3]
-        # Simulate the UI step filter: clicking step 2 keeps exactly that log.
+        # Simulate the UI step filter: clicking step 2 keeps exactly that entry.
         clicked = 2
-        assert [l["message"] for l in logs if l["step"] == clicked] == ["log 2"]
+        assert [l["message"] for l in texts if l["step"] == clicked] == ["log 2"]
 
 
 class TestMetricBatchIngest:
@@ -1113,11 +1130,11 @@ class TestMsgpackIngestEndpoint:
     def test_json_body_still_works(self) -> None:
         state, client = self._client()
         resp = client.post("/events?run_id=r1", json=[
-            {"type": "log", "loggable_id": "__global__", "message": "hi",
+            {"type": "text", "loggable_id": "__global__", "message": "hi",
              "timestamp": 1.0},
         ])
         assert resp.status_code == 200
-        assert len(state.runs["r1"].logs) == 1
+        assert len(state.runs["r1"].texts) == 1
 
 
 class TestWsBroadcastQueues:
@@ -1138,13 +1155,13 @@ class TestWsBroadcastQueues:
         try:
             t0 = time.monotonic()
             await state.ingest_events([
-                {"type": "log", "loggable_id": "__global__", "message": "hi",
+                {"type": "text", "loggable_id": "__global__", "message": "hi",
                  "timestamp": 1.0},
             ], run_id="r1")
             elapsed = time.monotonic() - t0
             # Broadcast must be enqueue-only — never awaiting the browser.
             assert elapsed < 1.0
-            assert len(state.runs["r1"].logs) == 1
+            assert len(state.runs["r1"].texts) == 1
         finally:
             client.task.cancel()
 
@@ -1173,11 +1190,11 @@ class TestWsBroadcastQueues:
         client = TestClient(app)
         with client.websocket_connect("/stream") as ws:
             client.post("/events?run_id=r1", json=[
-                {"type": "log", "loggable_id": "__global__", "message": "one",
+                {"type": "text", "loggable_id": "__global__", "message": "one",
                  "timestamp": 1.0},
             ])
             client.post("/events?run_id=r1", json=[
-                {"type": "log", "loggable_id": "__global__", "message": "two",
+                {"type": "text", "loggable_id": "__global__", "message": "two",
                  "timestamp": 2.0},
             ])
             first = _json.loads(ws.receive_text())
@@ -1228,3 +1245,88 @@ class TestLoadNeboFile:
         # The body still ingests normally after the synthesized run_start.
         entries = run.loggables["__global__"].metrics["loss"]["entries"]
         assert [e["value"] for e in entries] == [0.5]
+
+
+class TestDownsampleSeries:
+    """Server-side per-series decimation for GET /runs/{id}/metrics."""
+
+    def _line(self, n: int) -> dict:
+        return {
+            "type": "line",
+            "entries": [
+                {"step": i, "value": float(i % 50), "tags": [], "timestamp": float(i)}
+                for i in range(n)
+            ],
+        }
+
+    def test_under_cap_passthrough_annotated(self) -> None:
+        from nebo.server.daemon import downsample_series
+
+        series = self._line(10)
+        out = downsample_series(series, 2000)
+        assert out["entries"] == series["entries"]
+        assert out["total_points"] == 10
+        assert out["downsampled"] is False
+        # Input is never mutated (RAM path hands over live references).
+        assert "total_points" not in series
+
+    def test_line_minmax_keeps_spikes_and_endpoints(self) -> None:
+        from nebo.server.daemon import downsample_series
+
+        series = self._line(10_000)
+        series["entries"][7_777]["value"] = 9_999.0  # spike
+        out = downsample_series(series, 200)
+        assert out["downsampled"] is True
+        assert out["total_points"] == 10_000
+        assert len(out["entries"]) <= 202
+        values = [e["value"] for e in out["entries"]]
+        assert 9_999.0 in values  # min/max buckets preserve the spike
+        assert out["entries"][0] is series["entries"][0]
+        assert out["entries"][-1] is series["entries"][-1]
+        steps = [e["step"] for e in out["entries"]]
+        assert steps == sorted(steps)  # x order preserved
+
+    def test_snapshot_types_never_downsampled(self) -> None:
+        from nebo.server.daemon import downsample_series
+
+        series = {"type": "bar", "entries": [{"step": None, "value": {"a": 1}}] * 5}
+        out = downsample_series(series, 2)
+        assert len(out["entries"]) == 5
+        assert out["downsampled"] is False
+
+    def test_points_zero_is_full_fidelity(self) -> None:
+        from nebo.server.daemon import downsample_series
+
+        series = self._line(5_000)
+        out = downsample_series(series, 0)
+        assert len(out["entries"]) == 5_000
+        assert out["downsampled"] is False
+
+
+class TestIngestBroadcastGate:
+    @pytest.mark.asyncio
+    async def test_broadcast_false_skips_ws_enqueue(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.messages: list[str] = []
+
+            def enqueue(self, message: str) -> None:
+                self.messages.append(message)
+
+        state = DaemonState()
+        client = FakeClient()
+        state._ws_clients.append(client)  # type: ignore[arg-type]
+        events = [
+            {"type": "run_start", "data": {"run_id": "bg1", "script_path": "x.py"}},
+            {"type": "text", "loggable_id": "__global__", "name": "t", "message": "hi"},
+        ]
+        await state.ingest_events(list(events), run_id="bg1", broadcast=False)
+        assert client.messages == []
+        # The events still ingested.
+        assert len(state.runs["bg1"].texts) == 1
+
+        await state.ingest_events(
+            [{"type": "text", "loggable_id": "__global__", "name": "t", "message": "again"}],
+            run_id="bg1",
+        )
+        assert len(client.messages) == 1

@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import type { AxisTransform } from '@/hooks/useAxisTransform'
-import { MODALITY_COLORS as DOT_COLOR, type FlatRow } from '@/lib/streams'
+import { MODALITY_COLORS as DOT_COLOR, type FlatRow, type StreamModality } from '@/lib/streams'
 
 // Dedupe a row's datapoints by quantized x so DOM node count is bounded by
 // track width (~2.5px buckets at zoom 1), not by datapoint count. Bucket
@@ -67,11 +67,12 @@ export function TimelineRuler({ ticks, axis, isStep, minTime, height, pad, playh
   )
 }
 
-// The scrollable canvas: one datapoint row per FlatRow leaf (branch rows are
-// blank spacers so rows stay aligned 1:1 with the tree column), tick guides,
-// and the playhead — all inside the same `left:pad right:pad` plot box as the
-// ruler. SVG layers are pointer-transparent so the parent handles
-// scrub/pan/zoom.
+// The scrollable canvas: one datapoint row per FlatRow (expanded branch rows
+// without their own stream are blank spacers so rows stay aligned 1:1 with
+// the tree column; collapsed branch rows merge every descendant stream's
+// datapoints, colored per modality), tick guides, and the playhead — all
+// inside the same `left:pad right:pad` plot box as the ruler. SVG layers are
+// pointer-transparent so the parent handles scrub/pan/zoom.
 export function TimelineRows({ rows, rowHeight, isStep, axis, ticks, pad, playheadPct, showLabels = false, labelsDimmed = false }: {
   rows: FlatRow[]
   rowHeight: number
@@ -89,10 +90,23 @@ export function TimelineRows({ rows, rowHeight, isStep, axis, ticks, pad, playhe
   const totalH = rows.length * rowHeight
   // ~4 buckets per percent ≈ one per 2.5px on a 1000px track at zoom 1.
   const perPercent = 4 * axis.scale
+  // Per row: one bucket list per modality, so merged (collapsed-branch) rows
+  // keep per-dot modality colors. Plain leaf rows have exactly one entry.
   const bucketedRows = useMemo(
-    () => rows.map(row => (
-      row.leaf ? bucketRow(row.leaf.datapoints, isStep, axis.toPercent, perPercent) : null
-    )),
+    () => rows.map((row): { modality: StreamModality; pcts: number[] }[] | null => {
+      const leaves = row.mergedLeaves ?? (row.leaf ? [row.leaf] : null)
+      if (!leaves || leaves.length === 0) return null
+      const byModality = new Map<StreamModality, { step: number | null; timestamp: number }[]>()
+      for (const l of leaves) {
+        const arr = byModality.get(l.modality)
+        if (arr) arr.push(...l.datapoints)
+        else byModality.set(l.modality, [...l.datapoints])
+      }
+      return [...byModality.entries()].map(([modality, dps]) => ({
+        modality,
+        pcts: bucketRow(dps, isStep, axis.toPercent, perPercent),
+      }))
+    }),
     [rows, isStep, axis.toPercent, perPercent],
   )
   return (
@@ -105,10 +119,12 @@ export function TimelineRows({ rows, rowHeight, isStep, axis, ticks, pad, playhe
             ))}
           </svg>
           <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible" preserveAspectRatio="none">
-            {bucketedRows.map((pcts, i) => pcts
-              ? pcts.map((pct, j) => (
-                  <circle key={j} cx={`${pct}%`} cy={i * rowHeight + rowHeight / 2} r={2.5} fill={DOT_COLOR[rows[i].leaf!.modality]} opacity={0.85} />
-                ))
+            {bucketedRows.map((buckets, i) => buckets
+              ? buckets.map(b =>
+                  b.pcts.map((pct, j) => (
+                    <circle key={`${b.modality}-${j}`} cx={`${pct}%`} cy={i * rowHeight + rowHeight / 2} r={2.5} fill={DOT_COLOR[b.modality]} opacity={0.85} />
+                  )),
+                )
               : null)}
           </svg>
           {playheadPct != null && (

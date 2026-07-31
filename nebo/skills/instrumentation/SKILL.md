@@ -1,13 +1,13 @@
 ---
 name: nebo-instrumentation
-description: Use when writing Python code that needs to be instrumented with nebo — adding @nb.fn() decorators, calling nb.log / nb.log_line / log_bar / log_pie / log_scatter / log_histogram / log_image / log_audio / log_cfg / track, declaring run-level metadata with nb.md / nb.ui. Covers ML training loops, data-processing pipelines, and agentic workflows.
+description: Use when writing Python code that needs to be instrumented with nebo — adding @nb.fn() decorators, calling nb.log_text / nb.log_line / log_bar / log_pie / log_scatter / log_histogram / log_image / log_audio / log_cfg / track, declaring run-level metadata with nb.md / nb.ui. Covers ML training loops, data-processing pipelines, and agentic workflows.
 ---
 
 # Nebo (instrumentation)
 
 ## Overview
 
-Nebo is a modern logging SDK for multi-modal data. You decorate functions with `@nb.fn()`, call `nb.log()` inside them, and nebo automatically infers a DAG from data flow, captures metrics, tracks progress, and exposes everything via MCP tools and a web UI.
+Nebo is a modern logging SDK for multi-modal data. You decorate functions with `@nb.fn()`, call `nb.log_text()` inside them, and nebo automatically infers a DAG from data flow, captures metrics, tracks progress, and exposes everything via MCP tools and a web UI.
 
 **Core principle:** Decorate every meaningful step as `@nb.fn()`. Edges between nodes are inferred from data flow — no manual wiring. Call `nb.md()` and `nb.ui()` at module level before any decorated functions execute — they are declarative (no run is created until the first real log/metric event) and compose with `nb.start_run()`: metadata declared outside a run applies to every run the script opens; metadata called inside a run applies to that run only.
 
@@ -56,7 +56,7 @@ nb.ui(view="flat", layout="horizontal", tracker="step")
 def create_dataset(n=1000):
     """Generate training data."""
     X, y = make_data(n)
-    nb.log(f"Created dataset: {n} samples")
+    nb.log_text("status", f"Created dataset: {n} samples")
     return X, y
 
 @nb.fn()
@@ -77,7 +77,7 @@ def train(dataset, model, epochs=100, lr=0.01):
         nb.log_line("accuracy", acc, step=epoch)
 
         if epoch % 10 == 0:
-            nb.log(f"Epoch {epoch}: loss={loss:.4f}")
+            nb.log_text("epochs", f"Epoch {epoch}: loss={loss:.4f}")
             img = visualize(model)
             nb.log_image(img, name="weights", step=epoch)
 
@@ -125,7 +125,7 @@ nb.ui(layout="horizontal", view="dag", minimap=True, tracker="step")
 def load_data(path="data.csv"):
     """Load raw records."""
     records = read_csv(path)
-    nb.log(f"Loaded {len(records)} records from {path}")
+    nb.log_text("status", f"Loaded {len(records)} records from {path}")
     return records
 
 @nb.fn()
@@ -141,13 +141,13 @@ def filter_outliers(records, threshold=3.0):
     """Remove statistical outliers."""
     nb.log_cfg({"threshold": threshold})
     filtered = [r for r in records if abs(r["value"]) < threshold]
-    nb.log(f"Filtered: {len(records)} -> {len(filtered)}")
+    nb.log_text("status", f"Filtered: {len(records)} -> {len(filtered)}")
     return filtered
 
 @nb.fn()
 def generate_report(clean, raw):
     """Compare clean vs raw datasets."""
-    nb.log(f"summary — clean: {len(clean)} | raw: {len(raw)}")
+    nb.log_text("summary", f"summary — clean: {len(clean)} | raw: {len(raw)}")
     return {"clean": len(clean), "raw": len(raw)}
 
 @nb.fn()
@@ -180,7 +180,7 @@ nb.ui(view="dag", layout="vertical", tracker="step")
 def fetch_context(query):
     """Retrieve relevant documents."""
     docs = search(query)
-    nb.log(f"Found {len(docs)} documents")
+    nb.log_text("status", f"Found {len(docs)} documents")
     return docs
 
 @nb.fn()
@@ -189,13 +189,13 @@ class Agent:
 
     def think(self, query, context):
         """Analyze query and form a plan."""
-        nb.log(f"Thinking: {query}")
+        nb.log_text("thoughts", f"Thinking: {query}")
         nb.log_line("context_docs", float(len(context)))
         return {"plan": f"Respond using {len(context)} docs"}
 
     def act(self, plan):
         """Execute the plan."""
-        nb.log(f"Acting: {plan['plan']}")
+        nb.log_text("actions", f"Acting: {plan['plan']}")
         result = execute(plan)
         return result
 
@@ -227,7 +227,7 @@ def main():
 | `@nb.fn()` | Register function/class as DAG node |
 | `@nb.fn(depends_on=[f])` | Explicit edge when data flow can't infer |
 | `@nb.fn(ui={"collapsed": True})` | Per-node UI hints |
-| `nb.log(message)` | Text log to current node |
+| `nb.log_text(name, message, step=)` | Named text stream on the current node |
 | `nb.log_line(name, value, step=, tags=)` | Scalar metric — accumulates over steps |
 | `nb.log_bar(name, {label: number})` | Bar-chart snapshot — overwrites on re-emit |
 | `nb.log_pie(name, {label: number})` | Pie-chart snapshot — overwrites on re-emit |
@@ -240,7 +240,7 @@ def main():
 | `nb.md(description)` | Workflow-level markdown |
 | `nb.ui(layout=, view=, tracker=, ...)` | Run-level UI defaults |
 | `nb.start_run(name=, config=, run_id=)` | Multi-run / resume support |
-| `nb.init(mode=, dag_strategy=, ...)` | Manual initialization |
+| `nb.init(uri=, dag_strategy=, ...)` | Manual initialization |
 
 ### `nb.ui()` Parameters
 
@@ -327,21 +327,26 @@ def process():
     ...  # uses resources from setup() via shared state
 ```
 
+**Node ids are unique.** A node's id is the function's qualname. Two *different*
+functions that would decorate to the same id (e.g. a top-level `step()` in two
+modules) do not merge — the second registers module-qualified (`pkg_b.eval.step`)
+with a one-time warning.
+
 ## MCP Tools Reference
 
-When the nebo daemon is running (`nebo serve`), 15 MCP tools are available for querying and controlling pipelines. Run `nebo mcp` to get the Claude Code MCP config.
+When the nebo daemon is running (`nebo serve`), 23 MCP tools are available for querying and controlling pipelines. Run `nebo mcp` to get the Claude Code MCP config.
 
-### Observation — Reading Logs and State
+### Observation — Reading Text and State
 
 | Tool | Parameters | Returns |
 |------|------------|---------|
 | `nebo_get_graph` | `run_id?` | Full DAG: nodes (name, docstring, exec_count, progress, group, ui_hints), edges, workflow description |
-| `nebo_get_loggable_status` | `loggable_id`, `run_id?` | Single loggable detail (node or global): logs (last 20), metrics, params, progress |
-| `nebo_get_logs` | `loggable_id?`, `run_id?`, `limit?` (default 100) | Recent log entries filtered by loggable_id |
+| `nebo_get_loggable_status` | `loggable_id`, `run_id?` | Single loggable detail (node or global): recent text entries, metrics, params, progress |
+| `nebo_get_text` | `loggable_id?`, `run_id?`, `limit?` (default 100) | Recent text entries filtered by loggable_id |
 | `nebo_get_metrics` | `loggable_id`, `name?` | Metric time series: `{metric_name: [(step, value), ...]}` |
 | `nebo_get_description` | — | Workflow description + all node docstrings |
-| `nebo_get_run_status` | `run_id` | Run status: running/completed/crashed/stopped, exit code, duration |
-| `nebo_get_run_history` | — | All runs with outcomes, timestamps, error counts |
+| `nebo_get_run_status` | `run_id` | Run summary: timestamps, counts, `run_config`, `metrics_index` |
+| `nebo_get_run_history` | — | All runs with timestamps, counts, and metric indexes |
 
 ### Utility & Write
 
@@ -355,14 +360,14 @@ When the nebo daemon is running (`nebo serve`), 15 MCP tools are available for q
 
 1. The user launches the script themselves: `uv run python my_script.py`. The SDK prints `Your run id is: <id>.` on connect.
 2. **Watch:** `nebo_wait_for_alert` to block until `nb.alert(...)` fires (or use the equivalent CLI: `nebo runs wait <id>`). To be woken when the run *finishes*, set a heartbeat rule first — `nebo alerts set --title done --condition "last_event > 120" --run <id>` — nebo has no completed status; going idle is the completion signal.
-3. **Inspect:** `nebo_get_graph` for DAG overview, `nebo_get_logs` / `nebo_get_metrics` for detail.
+3. **Inspect:** `nebo_get_graph` for DAG overview, `nebo_get_text` / `nebo_get_metrics` for detail.
 5. **Iterate:** Edit the source file directly with your normal file tools, then re-run from the shell.
 
 ## Common Mistakes
 
 | Mistake | Fix |
 |---------|-----|
-| Calling `nb.log()` outside `@nb.fn()` | All logging must be inside a decorated function |
+| Calling `nb.log_text()` outside `@nb.fn()` | Pipeline logging belongs inside decorated functions (outside, it lands on the Global loggable) |
 | Manual DAG wiring | Let data flow infer edges. Only use `depends_on` for implicit deps |
 | Forgetting `step=` in training metrics | Without step, metrics pile up without x-axis alignment |
 | Calling `nb.ui()` inside `@nb.fn()` | Call `nb.ui()` at module level, before any function runs — outside a run it describes every run the script opens |

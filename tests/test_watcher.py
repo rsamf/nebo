@@ -31,7 +31,7 @@ async def test_watcher_picks_up_new_file(tmp_path):
 
     _write_run_file(
         tmp_path, "newrun123456",
-        [{"type": "log", "loggable_id": "__global__", "message": "hello"}],
+        [{"type": "text", "loggable_id": "__global__", "message": "hello"}],
     )
 
     await asyncio.sleep(0.3)
@@ -42,10 +42,10 @@ async def test_watcher_picks_up_new_file(tmp_path):
     # file's body is not read until a detail request deepens it.
     assert "newrun123456" in state.runs
     run = state.runs["newrun123456"]
-    assert not any(l.message == "hello" for l in run.logs)
+    assert not any(l.message == "hello" for l in run.texts)
 
     await watcher.ensure_deep("newrun123456")
-    assert any(l.message == "hello" for l in state.runs["newrun123456"].logs)
+    assert any(l.message == "hello" for l in state.runs["newrun123456"].texts)
 
 
 @pytest.mark.asyncio
@@ -56,14 +56,14 @@ async def test_watcher_tails_appended_entries(tmp_path):
 
     filepath = _write_run_file(
         tmp_path, "tailrun654321",
-        [{"type": "log", "loggable_id": "__global__", "message": "first"}],
+        [{"type": "text", "loggable_id": "__global__", "message": "first"}],
     )
     await asyncio.sleep(0.2)
 
     f = filepath.open("ab")
     writer = NeboFileWriter(f, run_id="tailrun654321", script_path="/x/s.py")
     writer.write_entry(
-        "log", {"type": "log", "loggable_id": "__global__", "message": "second"},
+        "text", {"type": "text", "loggable_id": "__global__", "message": "second"},
     )
     writer.close()
     f.close()
@@ -72,7 +72,7 @@ async def test_watcher_tails_appended_entries(tmp_path):
     watcher.stop()
     await task
 
-    msgs = [l.message for l in state.runs["tailrun654321"].logs]
+    msgs = [l.message for l in state.runs["tailrun654321"].texts]
     assert msgs == ["first", "second"]
 
 
@@ -92,7 +92,7 @@ async def test_offsets_persist_across_restart(tmp_path):
     try:
         _write_run_file(
             logdir, "persistrun01",
-            [{"type": "log", "loggable_id": "__global__", "message": "one"}],
+            [{"type": "text", "loggable_id": "__global__", "message": "one"}],
         )
         watcher = DirectoryWatcher(state, logdir=logdir, poll_interval=0.05)
         await watcher._tick()                     # shallow register
@@ -100,7 +100,7 @@ async def test_offsets_persist_across_restart(tmp_path):
         assert cache.flush()
         assert state.runs["persistrun01"].source == "watcher"
         n_before = cache._read_conn().execute(
-            "SELECT COUNT(*) FROM logs"
+            "SELECT COUNT(*) FROM texts"
         ).fetchone()[0]
         assert n_before == 1
         cache.close()
@@ -117,11 +117,11 @@ async def test_offsets_persist_across_restart(tmp_path):
         # Nothing re-ingested: no RAM run materialized, row count unchanged.
         assert "persistrun01" not in state2.runs
         n_after = cache2._read_conn().execute(
-            "SELECT COUNT(*) FROM logs"
+            "SELECT COUNT(*) FROM texts"
         ).fetchone()[0]
         assert n_after == n_before
         # And the run is still fully queryable from SQL.
-        assert state2.run_summary("persistrun01")["log_count"] == 1
+        assert state2.run_summary("persistrun01")["text_count"] == 1
         cache2.close()
     finally:
         if cache._running:
@@ -136,7 +136,7 @@ async def test_torn_tail_parks_and_resumes(tmp_path):
     try:
         filepath = _write_run_file(
             logdir, "tornrun00001",
-            [{"type": "log", "loggable_id": "__global__", "message": f"m{i}"}
+            [{"type": "text", "loggable_id": "__global__", "message": f"m{i}"}
              for i in range(3)],
         )
         whole = filepath.read_bytes()
@@ -147,13 +147,13 @@ async def test_torn_tail_parks_and_resumes(tmp_path):
         await watcher._tick()                     # shallow register
         # Deepening reads the body but parks at the torn last frame.
         await watcher.ensure_deep("tornrun00001")
-        msgs = [l.message for l in state.runs["tornrun00001"].logs]
+        msgs = [l.message for l in state.runs["tornrun00001"].texts]
         assert msgs == ["m0", "m1"]
 
         # Complete the write; the tail resumes and only the missing entry arrives.
         filepath.write_bytes(whole)
         await watcher._tick()
-        msgs = [l.message for l in state.runs["tornrun00001"].logs]
+        msgs = [l.message for l in state.runs["tornrun00001"].texts]
         assert msgs == ["m0", "m1", "m2"]
     finally:
         cache.close()

@@ -5,7 +5,7 @@ Usage:
 
     @nb.fn()
     def my_function():
-        nb.log("hello")
+        nb.log_text("status", "hello")
         nb.log_line("loss", 0.5)
 """
 
@@ -28,7 +28,8 @@ from nebo.notebook import show
 from nebo import labels
 from nebo.core import groups
 from nebo.logging.logger import (
-    log,
+    log,  # deprecated shim over log_text; warns once, removed in a later release
+    log_text,
     log_line,
     log_bar,
     log_pie,
@@ -146,7 +147,7 @@ def init(
         import warnings
         warnings.warn(
             "nebo was already implicitly initialized by a prior nb.* call. "
-            "Call nb.init() before any @nb.fn() execution, nb.log(), nb.md(), etc. "
+            "Call nb.init() before any @nb.fn() execution, nb.log_text(), nb.md(), etc. "
             "This nb.init() call will be ignored.",
             stacklevel=2,
         )
@@ -368,7 +369,7 @@ def _create_run_transport(
 
 
 def _install_text_logger() -> None:
-    """Route nb.log()'s text messages to stdout via the 'nebo' stdlib logger.
+    """Route nb.log_text()'s messages to stdout via the 'nebo' stdlib logger.
 
     Idempotent — repeated calls don't stack handlers.
     """
@@ -638,7 +639,8 @@ __all__ = [
     "track",
     "init",
     "flush",
-    "log",
+    "log",  # deprecated alias for log_text
+    "log_text",
     "log_cfg",
     "log_line",
     "log_bar",

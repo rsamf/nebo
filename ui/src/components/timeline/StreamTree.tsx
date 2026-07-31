@@ -22,7 +22,9 @@ export function StreamTree({ rows, rowHeight, collapsed, selectedPath, onSelect,
   return (
     <div>
       {rows.map(row => {
-        const Icon = row.isLeaf && row.leaf ? ICON[row.leaf.modality] : null
+        // Branch rows that are themselves a stream (/a/b logged alongside
+        // /a/b/c) show their modality icon too.
+        const Icon = row.leaf ? ICON[row.leaf.modality] : null
         const isSel = row.isLeaf && row.path === selectedPath
         return (
           <div

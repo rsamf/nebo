@@ -16,13 +16,13 @@ interface LoggableTabContainerProps {
 }
 
 const allTabs: { key: NodeTab; label: string; alwaysShow: boolean }[] = [
-  { key: 'logs', label: 'Logs', alwaysShow: false },
+  { key: 'text', label: 'Text', alwaysShow: false },
   { key: 'metrics', label: 'Metrics', alwaysShow: false },
   { key: 'images', label: 'Images', alwaysShow: false },
   { key: 'audio', label: 'Audio', alwaysShow: false },
 ]
 
-const VALID_TABS: readonly NodeTab[] = ['logs', 'metrics', 'images', 'audio']
+const VALID_TABS: readonly NodeTab[] = ['text', 'metrics', 'images', 'audio']
 
 export function LoggableTabContainer({ runId, loggableId, fillParent = false }: LoggableTabContainerProps) {
   const run = useStore(s => s.runs.get(runId))
@@ -37,7 +37,7 @@ export function LoggableTabContainer({ runId, loggableId, fillParent = false }: 
     const hint = run?.graph?.nodes?.[loggableId]?.ui_hints?.default_tab
     return typeof hint === 'string' && (VALID_TABS as readonly string[]).includes(hint)
       ? (hint as NodeTab)
-      : 'logs'
+      : 'text'
   }, [run?.graph?.nodes, loggableId])
 
   // User-selected tab persists across graph re-renders by living in the
@@ -47,16 +47,16 @@ export function LoggableTabContainer({ runId, loggableId, fillParent = false }: 
   const activeTab: NodeTab = userTab ?? defaultTab
 
   // In comparison mode, aggregate data availability across all runs
-  const hasLogs = useMemo(() => {
+  const hasText = useMemo(() => {
     if (isComparison) {
       return comparisonRunIds.some(rid => {
         const r = runs.get(rid)
         if (!r) return false
-        return r.logs?.some(l => l.node === loggableId) ?? false
+        return r.texts?.some(t => t.node === loggableId) ?? false
       })
     }
     if (!run) return false
-    return run.logs?.some(l => l.node === loggableId) ?? false
+    return run.texts?.some(t => t.node === loggableId) ?? false
   }, [isComparison, comparisonRunIds, runs, run, loggableId])
 
   const hasMetrics = useMemo(() => {
@@ -87,14 +87,14 @@ export function LoggableTabContainer({ runId, loggableId, fillParent = false }: 
     return allTabs.filter(tab => {
       if (tab.alwaysShow) return true
       switch (tab.key) {
-        case 'logs': return hasLogs
+        case 'text': return hasText
         case 'metrics': return hasMetrics
         case 'images': return hasImages
         case 'audio': return hasAudio
         default: return false
       }
     })
-  }, [hasLogs, hasMetrics, hasImages, hasAudio])
+  }, [hasText, hasMetrics, hasImages, hasAudio])
 
   // Nothing to show — let parents collapse the surrounding chrome (no
   // empty bordered tab strip on nodes that haven't logged anything).
@@ -146,7 +146,7 @@ export function LoggableTabContainer({ runId, loggableId, fillParent = false }: 
       {/* Tab content */}
       {/*
         In fillParent mode every tab body owns its own scroll container
-        (NodeLogs / NodeImages / NodeMetrics / NodeAudio all switch to
+        (NodeText / NodeImages / NodeMetrics / NodeAudio all switch to
         `h-full overflow-auto` when fillParent is set), so we drop the
         wrapper's overflow to avoid nested scrollbars. Default mode
         keeps the legacy max-h cap with overflow on the wrapper.

@@ -105,7 +105,7 @@ class TestStateIsolation:
         with nb.start_run(name="first"):
             @fn()
             def step_a():
-                nb.log("a")
+                nb.log_text("text", "a")
             step_a()
             assert _node_count(state) > 0
 
@@ -119,7 +119,7 @@ class TestStateIsolation:
 
         @fn()
         def my_step():
-            nb.log("working")
+            nb.log_text("text", "working")
 
         # Run 1: node should appear
         with nb.start_run(name="run-1"):
@@ -149,7 +149,7 @@ class TestStateIsolation:
                 child()
             @fn()
             def child():
-                nb.log("c")
+                nb.log_text("text", "c")
             parent()
             assert len(state.edges) > 0
 
@@ -196,7 +196,7 @@ class TestResume:
             run_a_id = run.run_id
             @fn()
             def step_a():
-                nb.log("hello from A")
+                nb.log_text("text", "hello from A")
             step_a()
             node_count_a = _node_count(state)
             assert node_count_a > 0
@@ -205,7 +205,7 @@ class TestResume:
         with nb.start_run(name="B"):
             @fn()
             def step_b():
-                nb.log("hello from B")
+                nb.log_text("text", "hello from B")
             step_b()
             assert _node_count(state) > 0
 
@@ -237,14 +237,14 @@ class TestResume:
                 id_a = run.run_id
                 @fn()
                 def iter_a():
-                    nb.log(f"A iteration {i}")
+                    nb.log_text("text", f"A iteration {i}")
                 iter_a()
 
             with nb.start_run(name="B", run_id=id_b) as run:
                 id_b = run.run_id
                 @fn()
                 def iter_b():
-                    nb.log(f"B iteration {i}")
+                    nb.log_text("text", f"B iteration {i}")
                 iter_b()
 
         assert id_a is not None
@@ -378,7 +378,7 @@ class TestSessionStateSnapshots:
 
         @fn()
         def my_node():
-            nb.log("hello")
+            nb.log_text("text", "hello")
         my_node()
 
         state.save_run_state("test-run")
@@ -397,7 +397,7 @@ class TestSessionStateSnapshots:
 
         @fn()
         def my_node():
-            nb.log("hello")
+            nb.log_text("text", "hello")
         my_node()
         assert _node_count(state) > 0
 
@@ -407,7 +407,7 @@ class TestSessionStateSnapshots:
     def test_clear_run_state(self) -> None:
         """clear_run_state should reset all per-run fields."""
         state = get_state()
-        nb.log("materialize")  # md outside a live run is declarative
+        nb.log_text("text", "materialize")  # md outside a live run is declarative
         nb.md("test description")
         assert state.workflow_description is not None
 
@@ -422,14 +422,14 @@ class TestSessionStateSnapshots:
 
         @fn()
         def node_a():
-            nb.log("a")
+            nb.log_text("text", "a")
         node_a()
         state.save_run_state("snap-1")
         count_1 = _node_count(state)
 
         @fn()
         def node_b():
-            nb.log("b")
+            nb.log_text("text", "b")
         node_b()
         assert _node_count(state) > count_1
 

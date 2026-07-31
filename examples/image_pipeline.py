@@ -43,7 +43,7 @@ def generate_images(num_images: int = 10, size: int = 128) -> list[Image.Image]:
         img = _make_synthetic_image(i, size)
         nb.log_image(img, name="generated", step=i)
         images.append(img)
-    nb.log(f"Generated {num_images} images at {size}x{size}")
+    nb.log_text("status", f"Generated {num_images} images at {size}x{size}")
     return images
 
 
@@ -56,7 +56,7 @@ def to_grayscale(images: list[Image.Image]) -> list[Image.Image]:
         gray = img.convert("L").convert("RGB")
         nb.log_image(gray, name="grayscale", step=i)
         result.append(gray)
-    nb.log(f"Converted {len(images)} images to grayscale")
+    nb.log_text("status", f"Converted {len(images)} images to grayscale")
     return result
 
 
@@ -69,7 +69,7 @@ def apply_blur(images: list[Image.Image], radius: float = 2.0) -> list[Image.Ima
         blurred = img.filter(ImageFilter.GaussianBlur(radius=radius))
         nb.log_image(blurred, name="blurred", step=i)
         result.append(blurred)
-    nb.log(f"Applied Gaussian blur (radius={radius}) to {len(images)} images")
+    nb.log_text("status", f"Applied Gaussian blur (radius={radius}) to {len(images)} images")
     return result
 
 
@@ -82,7 +82,7 @@ def enhance_contrast(images: list[Image.Image], factor: float = 1.8) -> list[Ima
         enhanced = ImageEnhance.Contrast(img).enhance(factor)
         nb.log_image(enhanced, name="contrast_enhanced", step=i)
         result.append(enhanced)
-    nb.log(f"Enhanced contrast (factor={factor}) on {len(images)} images")
+    nb.log_text("status", f"Enhanced contrast (factor={factor}) on {len(images)} images")
     return result
 
 
@@ -112,7 +112,7 @@ def detect_edges(images: list[Image.Image]) -> list[Image.Image]:
         mean_intensity = float(arr.mean())
         nb.log_line("edge_intensity", mean_intensity, step=i)
         result.append(edges)
-    nb.log(f"Detected edges in {len(images)} images")
+    nb.log_text("status", f"Detected edges in {len(images)} images")
     return result
 
 
@@ -126,7 +126,7 @@ def compute_stats(images: list[Image.Image]) -> dict:
         nb.log_line("brightness", brightness, step=i)
         stats.append({"index": i, "brightness": brightness})
     avg = sum(s["brightness"] for s in stats) / len(stats)
-    nb.log(f"Average brightness across {len(images)} images: {avg:.1f}")
+    nb.log_text("status", f"Average brightness across {len(images)} images: {avg:.1f}")
     return {"per_image": stats, "average_brightness": avg}
 
 

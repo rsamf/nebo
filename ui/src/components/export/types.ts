@@ -11,7 +11,7 @@ export interface ExportOptions {
   showExecCount: boolean
   showDocstring: boolean
   tabbedContent: TabbedContent
-  // Cap on how many entries (logs, images, audio, charts) appear per node.
+  // Cap on how many entries (text, images, audio, charts) appear per node.
   // 1 keeps each node compact; higher values let through more content.
   entriesPerNode: number
   theme: Theme
@@ -42,7 +42,7 @@ export type DrawioAtomKind =
   | 'exec-count'
   | 'docstring'
   | 'config-row'
-  | 'log-line'
+  | 'text-line'
   | 'chart'
   | 'image'
   | 'audio'

@@ -44,7 +44,7 @@ class TestRunCacheCore:
 
     def test_logdir_mismatch_recreates(self, tmp_path):
         c = _mk(tmp_path)
-        c.enqueue(("log_row", "r1", "__global__", "text", 1.0, None, "info", "x"))
+        c.enqueue(("text_row", "r1", "__global__", "text", 1.0, None, "x"))
         assert c.flush()
         c.close()
 
@@ -56,20 +56,20 @@ class TestRunCacheCore:
             ).fetchone()
             assert row[0].endswith("other")
             # Recreated from scratch: the old row is gone.
-            n = c2._read_conn().execute("SELECT COUNT(*) FROM logs").fetchone()[0]
+            n = c2._read_conn().execute("SELECT COUNT(*) FROM texts").fetchone()[0]
             assert n == 0
         finally:
             c2.close()
 
     def test_reopen_same_logdir_preserves_data(self, tmp_path):
         c = _mk(tmp_path)
-        c.enqueue(("log_row", "r1", "__global__", "text", 1.0, None, "info", "x"))
+        c.enqueue(("text_row", "r1", "__global__", "text", 1.0, None, "x"))
         assert c.flush()
         c.close()
 
         c2 = _mk(tmp_path)
         try:
-            n = c2._read_conn().execute("SELECT COUNT(*) FROM logs").fetchone()[0]
+            n = c2._read_conn().execute("SELECT COUNT(*) FROM texts").fetchone()[0]
             assert n == 1
         finally:
             c2.close()
@@ -77,10 +77,10 @@ class TestRunCacheCore:
     def test_write_behind_flush_barrier(self, tmp_path):
         c = _mk(tmp_path)
         try:
-            c.enqueue(("log_row", "r1", "__global__", "text", 1.0, None, "info", "hello"))
+            c.enqueue(("text_row", "r1", "__global__", "text", 1.0, None, "hello"))
             assert c.flush(timeout=5.0)
             n = c._read_conn().execute(
-                "SELECT COUNT(*) FROM logs WHERE run_id='r1'"
+                "SELECT COUNT(*) FROM texts WHERE run_id='r1'"
             ).fetchone()[0]
             assert n == 1
         finally:
@@ -88,13 +88,13 @@ class TestRunCacheCore:
 
     def test_close_flushes_pending(self, tmp_path):
         c = _mk(tmp_path)
-        c.enqueue(("log_row", "r1", "__global__", "text", 1.0, None, "info", "bye"))
+        c.enqueue(("text_row", "r1", "__global__", "text", 1.0, None, "bye"))
         c.close()
         import sqlite3
 
         conn = sqlite3.connect(tmp_path / "cache.db")
         try:
-            n = conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
+            n = conn.execute("SELECT COUNT(*) FROM texts").fetchone()[0]
             assert n == 1
         finally:
             conn.close()
@@ -129,8 +129,8 @@ def _seed_small_run(c: RunCache, run_id: str = "r1") -> None:
                None, 11.0, json.dumps({"x": 1}), json.dumps([]), None))
     c.enqueue(("metric_snapshot", run_id, "a", "dist", "bar",
                None, 12.0, json.dumps({"x": 2}), json.dumps([]), None))
-    c.enqueue(("log_row", run_id, "a", "text", 10.5, 1, "info", "hello"))
-    c.enqueue(("log_row", run_id, "__global__", "text", 10.6, None, "info", "world"))
+    c.enqueue(("text_row", run_id, "a", "text", 10.5, 1, "hello"))
+    c.enqueue(("text_row", run_id, "__global__", "text", 10.6, None, "world"))
     c.enqueue(("alert_row", run_id, 10.8, json.dumps({
         "title": "high loss", "level": 30, "triggered_by": "code",
         "timestamp": 10.8, "loggable_id": "a", "text": "",
@@ -156,7 +156,7 @@ class TestOpsAndAccessors:
             assert s["last_event_at"] is None  # not seeded here; no ended_at
             assert s["node_count"] == 2
             assert s["edge_count"] == 1
-            assert s["log_count"] == 2
+            assert s["text_count"] == 2
             assert s["metrics_index"] == {"a": ["dist", "loss"]}
             assert s["metric_series_count"] == 2
             assert s["latest_step"] == 2
@@ -182,17 +182,18 @@ class TestOpsAndAccessors:
         finally:
             c.close()
 
-    def test_logs_and_alerts(self, tmp_path):
+    def test_texts_and_alerts(self, tmp_path):
         c = _mk(tmp_path)
         try:
             _seed_small_run(c)
-            logs = c.get_logs("r1")
-            assert [l["message"] for l in logs] == ["hello", "world"]
-            assert logs[0]["loggable_id"] == "a"
-            assert logs[0]["step"] == 1
-            only_a = c.get_logs("r1", loggable_id="a")
+            texts = c.get_texts("r1")
+            assert [t["message"] for t in texts] == ["hello", "world"]
+            assert texts[0]["loggable_id"] == "a"
+            assert texts[0]["step"] == 1
+            assert "level" not in texts[0]
+            only_a = c.get_texts("r1", loggable_id="a")
             assert len(only_a) == 1
-            assert c.get_logs("r1", limit=1)[0]["message"] == "world"
+            assert c.get_texts("r1", limit=1)[0]["message"] == "world"
             alerts = c.get_alerts("r1")
             assert alerts[0]["title"] == "high loss"
         finally:
@@ -224,7 +225,7 @@ class TestOpsAndAccessors:
             assert lg["kind"] == "node"
             assert lg["exec_count"] == 2
             assert "loss" in lg["metrics"]
-            assert [l["message"] for l in lg["recent_logs"]] == ["hello"]
+            assert [l["message"] for l in lg["recent_texts"]] == ["hello"]
             assert c.get_loggable("r1", "zzz") is None
         finally:
             c.close()
@@ -238,7 +239,7 @@ class TestOpsAndAccessors:
             assert st["loggables"]["a"]["exec_count"] == 2
             assert st["edges"] == [{"source": "a", "target": "b"}]
             assert st["latest_step"] == 2
-            assert st["counts"]["logs"] == 2
+            assert st["counts"]["texts"] == 2
             assert st["run_row"]["script_path"] == "train.py"
             assert c.get_run_ingest_state("nope") is None
         finally:
@@ -309,7 +310,7 @@ class TestMediaStore:
         with path.open("wb") as f:
             w = NeboFileWriter(f, run_id="r1", script_path="s.py")
             w.write_header()
-            w.write_entry("log", {"type": "log", "message": "before"})
+            w.write_entry("text", {"type": "text", "message": "before"})
             w.write_entry("image", {
                 "type": "image", "loggable_id": "a", "name": "frame",
                 "data": base64.b64encode(png).decode("ascii"),
@@ -354,7 +355,7 @@ class TestIncrementalReader:
             w = NeboFileWriter(f, run_id="r1", script_path="s.py")
             w.write_header()
             for i in range(n_entries):
-                w.write_entry("log", {"type": "log", "message": f"m{i}"})
+                w.write_entry("text", {"type": "text", "message": f"m{i}"})
         return path
 
     def test_yields_entries_with_offsets(self, tmp_path):
@@ -428,7 +429,7 @@ def _events_small_run():
          "value": 0.4, "step": 1, "tags": [], "timestamp": 2.0},
         {"type": "metric", "loggable_id": "a", "name": "dist", "metric_type": "bar",
          "value": {"x": 1}, "step": None, "tags": [], "timestamp": 3.0},
-        {"type": "log", "loggable_id": "a", "name": "text", "message": "hi",
+        {"type": "text", "loggable_id": "a", "name": "text", "message": "hi",
          "step": None, "timestamp": 4.0},
         {"type": "image", "loggable_id": "a", "name": "frame",
          "data": base64.b64encode(png).decode("ascii"), "step": 1, "timestamp": 5.0},
@@ -448,7 +449,7 @@ class TestDaemonCacheIngest:
             m = c.get_metrics("r1")
             assert [e["value"] for e in m["a"]["loss"]["entries"]] == [0.5, 0.4]
             assert m["a"]["dist"]["entries"][0]["value"] == {"x": 1}
-            assert c.get_logs("r1")[0]["message"] == "hi"
+            assert c.get_texts("r1")[0]["message"] == "hi"
             s = c.get_summary("r1")
             assert s["script_path"] == "train.py"
             assert s["run_name"] == "exp"
@@ -471,7 +472,7 @@ class TestDaemonCacheIngest:
             run = state.runs["r1"]
             assert run.ram_complete is True
             assert run.latest_step == 1
-            assert run.resident_points == 4  # 3 metric entries + 1 log
+            assert run.resident_points == 4  # 3 metric entries + 1 text
             assert run.last_event_at > 0
             assert run.get_summary()["latest_step"] == 1
         finally:
@@ -537,7 +538,7 @@ class TestSqlReadParity:
     ENDPOINTS = [
         "/runs/r1",
         "/runs/r1/graph",
-        "/runs/r1/logs",
+        "/runs/r1/text",
         "/runs/r1/metrics",
         "/runs/r1/images",
         "/runs/r1/audio",
@@ -887,16 +888,16 @@ class TestReingestIdempotence:
         finally:
             c.close()
 
-    def test_log_row_deduped(self, tmp_path):
+    def test_text_row_deduped(self, tmp_path):
         c = _mk(tmp_path)
         try:
-            op = ("log_row", "r1", "a", "text", 1.0, None, "info", "hi")
+            op = ("text_row", "r1", "a", "text", 1.0, None, "hi")
             c.enqueue(op)
             c.enqueue(op)
             # Same instant, different message: distinct row.
-            c.enqueue(("log_row", "r1", "a", "text", 1.0, None, "info", "yo"))
+            c.enqueue(("text_row", "r1", "a", "text", 1.0, None, "yo"))
             assert c.flush()
-            assert self._count(c, "logs") == 2
+            assert self._count(c, "texts") == 2
         finally:
             c.close()
 
@@ -922,7 +923,7 @@ class TestReingestIdempotence:
             _, events = _events_small_run()
             await state.ingest_events(events, run_id="r1")
             assert c.flush()
-            tables = ("logs", "metrics", "media")
+            tables = ("texts", "metrics", "media")
             counts = {t: self._count(c, t) for t in tables}
             assert counts["media"] == 1
             _, again = _events_small_run()

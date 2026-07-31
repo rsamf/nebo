@@ -131,7 +131,7 @@ function renderAtom(atom: DrawioAtom): string {
     atom.kind === 'exec-count' ||
     atom.kind === 'docstring' ||
     atom.kind === 'config-row' ||
-    atom.kind === 'log-line' ||
+    atom.kind === 'text-line' ||
     (atom.kind === 'audio' && atom.text !== undefined)
   if (isText) {
     const fontSize = atom.fontSize ?? 12

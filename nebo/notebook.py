@@ -15,7 +15,7 @@ from typing import Optional, Union
 from nebo.core.state import get_state
 
 
-_SLICE_KWARGS = ("metric", "image", "audio", "logs", "dag")
+_SLICE_KWARGS = ("metric", "image", "audio", "text", "dag")
 
 
 class _ShowHandle:
@@ -54,7 +54,7 @@ def show(
     metric: Union[str, bool, None] = None,
     image: Union[str, bool, None] = None,
     audio: Union[str, bool, None] = None,
-    logs: bool = False,
+    text: Union[str, bool, None] = None,
     dag: bool = False,
     width: Union[str, int] = "100%",
     height: Union[str, int] = 600,
@@ -73,8 +73,9 @@ def show(
             the metrics gallery for the run (or for ``node``).
         image: Same shape as ``metric`` for images.
         audio: Same shape as ``metric`` for audio recordings.
-        logs: ``True`` shows the logs panel (optionally filtered by
-            ``node``).
+        text: Same shape as ``metric`` for text streams — a ``str``
+            shows a single named stream, ``True`` the text panel
+            (optionally filtered by ``node``).
         dag: ``True`` shows the DAG-only view.
         width, height: iframe dimensions. Strings (``"100%"``) or ints (px).
 
@@ -85,7 +86,7 @@ def show(
         "metric": metric,
         "image": image,
         "audio": audio,
-        "logs": logs,
+        "text": text,
         "dag": dag,
     }
     truthy = {k: v for k, v in active.items() if v}
@@ -128,8 +129,10 @@ def show(
         parts.append(f"audio={audio}")
     elif audio is True:
         parts.append("audios")
-    if logs:
-        parts.append("logs")
+    if isinstance(text, str):
+        parts.append(f"text={text}")
+    elif text is True:
+        parts.append("text")
     if dag:
         parts.append("dag")
 

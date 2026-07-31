@@ -87,7 +87,6 @@ export function MobileRunList() {
 function MobileSearchScreen({ onClose }: { onClose: () => void }) {
   const runs = useStore(s => s.runs)
   const runTree = useStore(s => s.runTree)
-  const runNames = useStore(s => s.runNames)
   const [query, setQuery] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -104,7 +103,7 @@ function MobileSearchScreen({ onClose }: { onClose: () => void }) {
   const matchedRuns = q
     ? summaries
         .filter(s =>
-          runDisplayName(s, runNames.get(s.id)).toLowerCase().includes(q) ||
+          runDisplayName(s).toLowerCase().includes(q) ||
           s.id.toLowerCase().includes(q),
         )
         .sort(byStartedDesc)
@@ -180,7 +179,6 @@ export function MobileGroupCard({
 }
 
 export function MobileRunCard({ run }: { run: RunSummary }) {
-  const customName = useStore(s => s.runNames.get(run.id))
   const runColor = useStore(s => s.runColors.get(run.id))
   const getOrAssignRunColor = useStore(s => s.getOrAssignRunColor)
   const loggableMetrics = useStore(s => s.runs.get(run.id)?.loggableMetrics)
@@ -201,7 +199,7 @@ export function MobileRunCard({ run }: { run: RunSummary }) {
         style={{ background: color }}
       />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium">{runDisplayName(run, customName)}</div>
+        <div className="truncate text-sm font-medium">{runDisplayName(run)}</div>
         <div className="mt-px truncate font-mono text-[11px] text-muted-foreground">
           {shortId(run.id)} · {live ? 'live' : timeAgo(run.last_event_at)}
         </div>

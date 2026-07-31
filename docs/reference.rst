@@ -45,12 +45,12 @@ Decorators
 Logging Functions
 -----------------
 
-.. function:: nb.log(message: str | Any, *, name: str = "text", step: int | None = None) -> None
+.. function:: nb.log_text(name: str, message: str | Any, *, step: int | None = None) -> None
 
-    Log a text message to the current node as a named stream. Tensor-like objects (NumPy arrays, PyTorch tensors) are auto-formatted with shape, dtype, and statistics.
+    Log a text message to a named stream on the current node. Text is a named payload stream like the metric and media helpers — ``log_text`` pairs a stream ``name`` with a ``message`` the way ``log_line`` pairs a name with a value. Tensor-like objects (NumPy arrays, PyTorch tensors) are auto-formatted with shape, dtype, and statistics.
 
+    :param name: Stream name for this entry, e.g. ``"status"`` or ``"rollout/summary"``. Different names create distinct streams, each shown as its own card in the UI and its own row in the Tracker tree.
     :param message: The message string or tensor-like object.
-    :param name: Stream name for this log entry. Defaults to ``"text"``. Multiple names create distinct streams that appear separately in the Tracker tree.
     :param step: Optional step counter.
 
 .. function:: nb.log_line(name, value, *, step=None, tags=None)
@@ -83,7 +83,7 @@ Logging Functions
    points to the same plot. ``step`` auto-increments per
    ``(loggable, name)`` when omitted, so each emission can be
    correlated to a moment in the run (e.g. clicking a point in the UI
-   filters logs/images/audio to that step).
+   filters text/images/audio to that step).
 
    :param step: Optional step counter for this emission.
    :param tags: List of strings attached to this emission for UI filtering.
@@ -122,7 +122,7 @@ Clicking any point on a line or scatter chart in the web UI sets a
 global step filter: the Tracker (bottom panel) switches to step mode,
 the clicked step is highlighted on every line/scatter chart (vertical
 guideline + value bubble for line, dimmed non-matching points for
-scatter), and the per-node logs/images/audio panels filter to entries
+scatter), and the per-node text/images/audio panels filter to entries
 whose ``step`` matches. Use the Tracker's **Clear all filters** button to
 clear the step filter (the **Reset zoom** button only resets the timeline
 zoom). You can also step through with the prev/next arrows or
@@ -274,7 +274,7 @@ Initialization
 Notebook Embedding
 ------------------
 
-.. function:: nb.show(*, run=None, node=None, metric=None, image=None, audio=None, logs=False, dag=False, width="100%", height=600)
+.. function:: nb.show(*, run=None, node=None, metric=None, image=None, audio=None, text=None, dag=False, width="100%", height=600)
 
     Return a Jupyter-renderable iframe of the daemon UI scoped to one
     slice of a run. The slice is determined by which kwargs are set —
@@ -286,7 +286,7 @@ Notebook Embedding
     :param metric: ``str`` shows a single metric by name; ``True`` shows the metrics gallery (filtered by ``node`` if set).
     :param image: Same shape as ``metric`` for images.
     :param audio: Same shape as ``metric`` for audio recordings.
-    :param logs: ``True`` shows the logs panel (filtered by ``node`` if set).
+    :param text: Same shape as ``metric`` for text streams — a ``str`` shows a single named stream; ``True`` shows the text panel (filtered by ``node`` if set).
     :param dag: ``True`` shows the DAG-only view.
     :param width, height: iframe dimensions. Strings (``"100%"``) or ints (px).
     :returns: A handle whose ``_repr_html_`` emits the ``<iframe>``.
@@ -296,7 +296,8 @@ Notebook Embedding
         nb.show(metric="loss")                # one metric chart
         nb.show(node="train", metric=True)    # gallery of train's metrics
         nb.show(image="hero.png")             # one image
-        nb.show(logs=True, node="train")      # logs panel filtered to train
+        nb.show(text=True, node="train")      # text panel filtered to train
+        nb.show(text="status")                # one named text stream
 
 Iframe URL scheme
 ~~~~~~~~~~~~~~~~~
@@ -311,7 +312,8 @@ URL                               Renders
 ``?run=X``                        Full run dashboard (DAG + timeline)
 ``?run=X&dag``                    DAG only
 ``?run=X&node=Y``                 Single node detail
-``?run=X&logs``                   Logs panel
+``?run=X&text``                   Text panel
+``?run=X&text=status``            Single named text stream
 ``?run=X&metrics``                Metrics gallery
 ``?run=X&metric=loss``            Single metric
 ``?run=X&images``                 Image gallery
@@ -324,6 +326,11 @@ Add ``&node=Y`` to any of the slice forms to filter to one node.
 Append ``&token=…`` to authenticate with a token-protected daemon —
 the dashboard captures it once, persists it in localStorage, and
 strips it from the visible URL.
+
+A canonical ``nebo://`` reference can also be embedded directly via
+``?ref=…``: a bare run ref (``?ref=nebo://run/X``) renders the full
+dashboard, a loggable ref (``?ref=nebo://run/X/train``) renders that
+node's card.
 
 
 State Access
@@ -399,12 +406,13 @@ Commands
 
         $ nebo stop [--port PORT]
 
-``logs``
-    View logs from runs.
+``text ls``
+    View text entries from runs. Each entry prints as
+    ``[loggable_id] name@step: message``.
 
     .. code-block:: console
 
-        $ nebo logs [--run RUN_ID] [--node NODE] [--limit N] [--port PORT]
+        $ nebo text ls [--run RUN_ID] [--node NODE] [--limit N] [--port PORT]
 
 ``load``
     Load a ``.nebo`` file into the daemon for viewing and Q&A. With
@@ -495,13 +503,13 @@ Observation Tools
     :param run_id: Optional run ID. Uses the latest run if omitted.
 
 ``nebo_get_loggable_status``
-    Get detailed status for a specific loggable (node or global): execution count, params, docstring, recent logs, and progress.
+    Get detailed status for a specific loggable (node or global): execution count, params, docstring, recent text entries, and progress.
 
     :param loggable_id: The loggable ID (required).
     :param run_id: Optional run ID.
 
-``nebo_get_logs``
-    Get recent log entries, optionally filtered by loggable and run.
+``nebo_get_text``
+    Get recent text entries, optionally filtered by loggable and run.
 
     :param loggable_id: Optional loggable ID filter.
     :param run_id: Optional run ID.
@@ -606,10 +614,11 @@ values aren't silently dropped.
     :param run_id: Default run ID.
 
 ``nebo_log_text``
-    Log one or more text entries. Mirrors ``nb.log``. ``loggable_id``
-    defaults to ``"__global__"`` when omitted.
+    Log one or more text entries. Mirrors ``nb.log_text``. ``name`` names
+    the text stream (default ``"text"``); ``loggable_id`` defaults to
+    ``"__agent__"`` when omitted.
 
-    :param entries: Single dict or list. Each: ``{run_id?, loggable_id?, message, level?, step?}``.
+    :param entries: Single dict or list. Each: ``{run_id?, loggable_id?, name?, message, step?}``.
     :param run_id: Default run ID.
 
 Run Tree Tools
@@ -637,7 +646,7 @@ Run Tree Tools
 ``nebo_get_group_doc`` / ``nebo_set_group_doc``
     Read or write a group's markdown doc (default ``README.md``). Record what
     the group is, why/how the experiments ran, and the findings — citing runs
-    with ``nebo://run/<id>?step=<n>`` links.
+    with canonical ``nebo://run/<id>@<step>`` references.
 
     :param path: Group path (required).
     :param content: Markdown body (``set`` only, required).
@@ -742,6 +751,6 @@ Nebo persists runs as append-only binary files using MessagePack.
       size: u32 big-endian (payload size in bytes)
       payload: msgpack map (entry-specific data)
 
-Entry types: log (0), metric (1), image (2), audio (3), node_register (4), edge (5), ui_config (8), text (9), progress (10), config (11), description (12), node_executed (13), run_start (15), run_completed (16), run_config (18), loggable_register (19). Codes 6, 7, 14, and 17 are reserved (formerly error, ask, ask_response, pause_state — removed).
+Entry types: metric (1), image (2), audio (3), node_register (4), edge (5), ui_config (8), text (9), progress (10), config (11), description (12), node_executed (13), run_start (15), run_completed (16), run_config (18), loggable_register (19). Code 0 is the legacy ``log`` entry — readers still accept it as a text entry, but writers emit ``text`` (9). Codes 6, 7, 14, and 17 are reserved (formerly error, ask, ask_response, pause_state — removed).
 
 Media assets (images, audio) are embedded as raw bytes inside the msgpack payload, avoiding base64 overhead.

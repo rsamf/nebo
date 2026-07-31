@@ -17,7 +17,7 @@ def generate_data(n: int = 200):
     np.random.seed(42)
     X = np.random.randn(n, 5).astype(np.float32)
     y = (X[:, 0] * 0.5 + X[:, 1] * 0.3 + np.random.randn(n) * 0.1).astype(np.float32)
-    nb.log(f"Generated {n} samples with 5 features")
+    nb.log_text("status", f"Generated {n} samples with 5 features")
     return X, y
 
 
@@ -35,10 +35,10 @@ def train(X, y, lr: float = 0.01, epochs: int = 50):
         nb.log_line("loss", loss, step=epoch)
 
         if epoch % 10 == 0:
-            nb.log(f"Epoch {epoch}: loss={loss:.4f}")
+            nb.log_text("epochs", f"Epoch {epoch}: loss={loss:.4f}")
 
     final_loss = float(np.mean((X @ w - y) ** 2))
-    nb.log(f"Final loss: {final_loss:.4f}")
+    nb.log_text("status", f"Final loss: {final_loss:.4f}")
     return w, final_loss
 
 
@@ -50,7 +50,7 @@ def evaluate(X, y, w):
     r2 = 1 - mse / float(np.var(y))
     nb.log_line("mse", mse)
     nb.log_line("r2", r2)
-    nb.log(f"MSE={mse:.4f}, R2={r2:.4f}")
+    nb.log_text("eval", f"MSE={mse:.4f}, R2={r2:.4f}")
     return {"mse": mse, "r2": r2}
 
 

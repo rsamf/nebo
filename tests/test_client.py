@@ -32,7 +32,7 @@ class TestDaemonClient:
     def test_send_event_buffers_when_disconnected(self) -> None:
         """Should buffer events in fallback buffer when not connected."""
         client = DaemonClient(port=19999)
-        client.send_event({"type": "log", "message": "buffered"})
+        client.send_event({"type": "text", "message": "buffered"})
         assert len(client._fallback_buffer) == 1
         assert client._fallback_buffer[0]["message"] == "buffered"
 
@@ -40,8 +40,8 @@ class TestDaemonClient:
         """Should buffer multiple events."""
         client = DaemonClient(port=19999)
         client.send_events([
-            {"type": "log", "message": "a"},
-            {"type": "log", "message": "b"},
+            {"type": "text", "message": "a"},
+            {"type": "text", "message": "b"},
         ])
         assert len(client._fallback_buffer) == 2
 
@@ -77,7 +77,7 @@ class TestDaemonClient:
                 pass
 
         client._connection = lambda: FakeConn()  # type: ignore[method-assign]
-        events = [{"type": "log", "message": "hi"}]
+        events = [{"type": "text", "message": "hi"}]
         packed = [msgpack.packb(e, use_bin_type=True) for e in events]
         ok, exc = client._post_packed(events, packed)
 
@@ -159,12 +159,12 @@ class TestPreparePackedQuarantine:
     def test_separates_set_value(self) -> None:
         client = DaemonClient()
         events = [
-            {"type": "log", "id": 1},
+            {"type": "text", "id": 1},
             {"type": "loggable_register", "ui_hints": {"default_tab", "metrics"}},
-            {"type": "log", "id": 2},
+            {"type": "text", "id": 2},
         ]
         good, packed, bad = client._prepare_packed(events)
-        assert good == [{"type": "log", "id": 1}, {"type": "log", "id": 2}]
+        assert good == [{"type": "text", "id": 1}, {"type": "text", "id": 2}]
         assert len(packed) == 2
         assert len(bad) == 1
         assert bad[0]["ui_hints"] == {"default_tab", "metrics"}
@@ -181,8 +181,8 @@ class TestShutdownDrainsFallbackBuffer:
 
     def test_disconnect_attempts_to_send_fallback_buffer(self) -> None:
         client = DaemonClient(port=19999)
-        client.send_event({"type": "log", "message": "parked1"})
-        client.send_event({"type": "log", "message": "parked2"})
+        client.send_event({"type": "text", "message": "parked1"})
+        client.send_event({"type": "text", "message": "parked2"})
         assert len(client._fallback_buffer) == 2
 
         sent: list[dict[str, Any]] = []
@@ -201,7 +201,7 @@ class TestShutdownDrainsFallbackBuffer:
     def test_disconnect_warns_when_fallback_undeliverable(self, capsys) -> None:
         client = DaemonClient(port=19999)
         client._shutdown_timeout = 0.3
-        client.send_event({"type": "log", "message": "doomed"})
+        client.send_event({"type": "text", "message": "doomed"})
 
         def fake_post(events, packed):
             return False, RuntimeError("still down")
@@ -226,9 +226,9 @@ class TestDoFlushQuarantine:
     def test_unserializable_event_does_not_block_good_events(self) -> None:
         client = DaemonClient()
         client._buffer = [
-            {"type": "log", "id": 1},
+            {"type": "text", "id": 1},
             {"type": "loggable_register", "ui_hints": {"a", "b"}},
-            {"type": "log", "id": 2},
+            {"type": "text", "id": 2},
         ]
         sent_batches: list[list[dict[str, Any]]] = []
 
@@ -243,8 +243,8 @@ class TestDoFlushQuarantine:
         assert ok is True
         flat = [e for b in sent_batches for e in b]
         assert flat == [
-            {"type": "log", "id": 1},
-            {"type": "log", "id": 2},
+            {"type": "text", "id": 1},
+            {"type": "text", "id": 2},
         ]
         assert client._buffer == []
 
@@ -285,9 +285,9 @@ class TestDoFlushQuarantine:
         """
         client = DaemonClient()
         client._buffer = [
-            {"type": "log", "id": 1},
+            {"type": "text", "id": 1},
             {"type": "x", "v": {"a"}},
-            {"type": "log", "id": 2},
+            {"type": "text", "id": 2},
         ]
         client._post_packed = lambda events, packed: (False, RuntimeError("net"))  # type: ignore[method-assign]
 
@@ -295,8 +295,8 @@ class TestDoFlushQuarantine:
 
         assert ok is False
         assert client._buffer == [
-            {"type": "log", "id": 1},
-            {"type": "log", "id": 2},
+            {"type": "text", "id": 1},
+            {"type": "text", "id": 2},
         ]
 
 
@@ -311,9 +311,9 @@ class TestDrainWithRetryQuarantine:
     def test_drains_around_unserializable_event(self) -> None:
         client = DaemonClient()
         client._buffer = [
-            {"type": "log", "id": 1},
+            {"type": "text", "id": 1},
             {"type": "x", "v": {"a", "b"}},
-            {"type": "log", "id": 2},
+            {"type": "text", "id": 2},
         ]
         sent: list[list[dict[str, Any]]] = []
 
@@ -328,8 +328,8 @@ class TestDrainWithRetryQuarantine:
 
         flat = [e for batch in sent for e in batch]
         assert flat == [
-            {"type": "log", "id": 1},
-            {"type": "log", "id": 2},
+            {"type": "text", "id": 1},
+            {"type": "text", "id": 2},
         ]
         assert result.sent == 2
         assert result.dropped == 0
@@ -663,7 +663,7 @@ class TestRunStartEmission:
 
         import nebo as nb
         nb.init(uri="localhost:7861")
-        nb.log("trigger materialization")
+        nb.log_text("text", "trigger materialization")
 
         assert len(self._captured) == 1
         client = self._captured[0]
@@ -682,7 +682,7 @@ class TestRunStartEmission:
 
         import nebo as nb
         nb.init(uri="localhost:7861")
-        nb.log("trigger materialization")
+        nb.log_text("text", "trigger materialization")
 
         assert len(self._captured) == 1
         client = self._captured[0]
@@ -710,7 +710,7 @@ class TestRunStartEmission:
 
         import nebo as nb
         nb.init(uri="localhost:7861")
-        nb.log("trigger materialization")
+        nb.log_text("text", "trigger materialization")
 
         client = self._captured[0]
         run_starts = [e for e in client.events if e.get("type") == "run_start"]
@@ -771,7 +771,7 @@ class TestUiConfigEmission:
         import nebo as nb
         nb.init(uri="localhost:7861")
         nb.ui(layout="horizontal", view="dag", minimap=True, theme="dark")
-        nb.log("materialize")  # first real event opens the run
+        nb.log_text("text", "materialize")  # first real event opens the run
 
         assert len(self._captured) == 1
         client = self._captured[0]
@@ -787,7 +787,7 @@ class TestUiConfigEmission:
         # Template application rides the normal event queue: after
         # run_start, before the materializing log.
         types = [e.get("type") for e in client.events]
-        assert types.index("run_start") < types.index("ui_config") < types.index("log")
+        assert types.index("run_start") < types.index("ui_config") < types.index("text")
 
     def test_ui_updates_session_state(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The template must land in SessionState.ui_config at
@@ -799,7 +799,7 @@ class TestUiConfigEmission:
 
         nb.init(uri="localhost:7861")
         nb.ui(layout="vertical", theme="light")
-        nb.log("materialize")
+        nb.log_text("text", "materialize")
 
         state = get_state()
         assert state.ui_config == {"layout": "vertical", "theme": "light"}
@@ -811,7 +811,7 @@ class TestUiConfigEmission:
         import nebo as nb
         nb.init(uri="localhost:7861")
         nb.ui(minimap=False)
-        nb.log("materialize")
+        nb.log_text("text", "materialize")
 
         client = self._captured[0]
         ui_events = [e for e in client.events if e.get("type") == "ui_config"]
@@ -858,9 +858,9 @@ class TestMsgpackWire:
         posted = []
         client._post_packed = lambda events, packed: (posted.extend(events), (True, None))[1]  # type: ignore[method-assign]
         client._buffer = [
-            {"type": "log", "message": "good"},
+            {"type": "text", "message": "good"},
             {"type": "loggable_register", "ui_hints": {"a", "b"}},  # a set
-            {"type": "log", "message": "also good"},
+            {"type": "text", "message": "also good"},
         ]
         with caplog.at_level(logging.WARNING, logger="nebo.core.client"):
             ok = client._do_flush()
@@ -874,9 +874,9 @@ class TestMsgpackWire:
         client._post_packed = lambda events, packed: (batches.append(list(events)), (True, None))[1]  # type: ignore[method-assign]
         big = "x" * 700_000  # ~700KB message; two fit under the 2MB cap, three do not
         client._buffer = [
-            {"type": "log", "message": big},
-            {"type": "log", "message": big},
-            {"type": "log", "message": big},
+            {"type": "text", "message": big},
+            {"type": "text", "message": big},
+            {"type": "text", "message": big},
         ]
         assert client._do_flush() is True
         assert len(batches) == 2
@@ -922,7 +922,7 @@ class TestMsgpackWire:
 
         fake = FakeConn()
         monkeypatch.setattr(client, "_connection", lambda: fake)
-        events = [{"type": "log", "message": "hi"}]
+        events = [{"type": "text", "message": "hi"}]
         import msgpack as _msgpack
 
         packed = [_msgpack.packb(e, use_bin_type=True) for e in events]
@@ -1022,7 +1022,7 @@ class TestPersistentReconnect:
             return True
 
         monkeypatch.setattr(client, "connect", fake_connect)
-        client._fallback_buffer = [{"type": "log", "message": "queued while down"}]
+        client._fallback_buffer = [{"type": "text", "message": "queued while down"}]
         sent: list[dict[str, Any]] = []
         client._post_packed = lambda events, packed: (sent.extend(events), (True, None))[1]  # type: ignore[method-assign]
 

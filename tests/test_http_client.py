@@ -55,8 +55,8 @@ from nebo.client import (
     get_description,
     get_graph,
     get_loggable_status,
-    get_logs,
     get_metrics,
+    get_text,
     load_file,
     _post,
 )
@@ -110,10 +110,15 @@ def test_get_metrics_passes_filter_query_params(monkeypatch):
     assert parts["step"] == "5"
 
 
-def test_get_logs_run_scoped(monkeypatch):
-    cap = _stub_urlopen(monkeypatch, b'{"logs": []}')
-    get_logs(run_id="abc", url="http://h")
-    assert cap["calls"][0]["url"] == "http://h/runs/abc/logs"
+def test_get_text_run_scoped(monkeypatch):
+    cap = _stub_urlopen(monkeypatch, b'{"texts": []}')
+    get_text(run_id="abc", url="http://h")
+    assert cap["calls"][0]["url"] == "http://h/runs/abc/text"
+
+def test_get_text_latest_run(monkeypatch):
+    cap = _stub_urlopen(monkeypatch, b'{"texts": []}')
+    get_text(url="http://h")
+    assert cap["calls"][0]["url"] == "http://h/text"
 
 
 def test_post_sends_json_body(monkeypatch):
@@ -163,8 +168,9 @@ def test_log_text_routes_default_to_agent(monkeypatch):
         lambda path, body, **c: posted.append((path, body)) or {"status": "ok"},
     )
     log_text([{"message": "hi"}], run_id="r1")
-    log_event = next(e for e in posted[0][1] if e["type"] == "log")
-    assert log_event["loggable_id"] == "__agent__"
+    text_event = next(e for e in posted[0][1] if e["type"] == "text")
+    assert text_event["loggable_id"] == "__agent__"
+    assert "level" not in text_event
 
 
 def test_log_text_forwards_name(monkeypatch):
@@ -174,8 +180,8 @@ def test_log_text_forwards_name(monkeypatch):
         lambda path, body, **c: posted.append((path, body)) or {"status": "ok"},
     )
     log_text([{"message": "hi", "name": "status"}], run_id="r1")
-    log_event = next(e for e in posted[0][1] if e["type"] == "log")
-    assert log_event["name"] == "status"
+    text_event = next(e for e in posted[0][1] if e["type"] == "text")
+    assert text_event["name"] == "status"
 
 
 import pytest

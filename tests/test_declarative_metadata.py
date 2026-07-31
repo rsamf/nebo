@@ -53,7 +53,7 @@ ORPHAN_SCRIPT = textwrap.dedent("""
     # ...followed by an explicit run. Pre-fix this produced TWO runs:
     # md/ui materialized an orphan implicit run, then start_run rolled it.
     with nb.start_run(name="the-run"):
-        nb.log("hi")
+        nb.log_text("text", "hi")
 """)
 
 
@@ -111,7 +111,7 @@ def test_first_log_materializes_and_carries_template(tmp_path, monkeypatch):
     try:
         nb.init(uri=str(tmp_path / "runs"))
         nb.md("template")
-        nb.log("materialize")
+        nb.log_text("text", "materialize")
         state = get_state()
         assert state._run_materialized is True
         assert state.workflow_description == "template"
@@ -123,7 +123,7 @@ def test_first_log_materializes_and_carries_template(tmp_path, monkeypatch):
 
     (file,) = (tmp_path / "runs").glob("*.nebo")
     types = [e["type"] for e in _read_events(file)]
-    assert types.index("run_start") < types.index("description") < types.index("log")
+    assert types.index("run_start") < types.index("description") < types.index("text")
 
 
 # ─── Template semantics (NO_STORE, state-level) ──────────────────────────────
@@ -207,7 +207,7 @@ class TestVirginRunAdoption:
     def test_start_run_after_real_events_opens_sibling(self, capturing_client) -> None:
         """A stray real event before start_run means the implicit run is
         genuine — keep today's close-and-roll semantics."""
-        nb.log("real event at import time")
+        nb.log_text("text", "real event at import time")
         state = get_state()
         implicit_id = state._active_run_id
 

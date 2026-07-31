@@ -46,14 +46,14 @@ class TestCoalesce:
         assert out[1] == events[1]
 
     def test_non_metric_events_untouched_in_order(self):
-        log1 = {"type": "log", "message": "a"}
-        log2 = {"type": "log", "message": "b"}
-        events = [log1, _pt("loss", 0.5, 0), log2, _pt("loss", 0.4, 1)]
+        text1 = {"type": "text", "message": "a"}
+        text2 = {"type": "text", "message": "b"}
+        events = [text1, _pt("loss", 0.5, 0), text2, _pt("loss", 0.4, 1)]
         out = coalesce(events)
-        # Batch lands at its first member's position; logs keep their order.
-        assert [e["type"] for e in out] == ["log", "metric_batch", "log"]
-        assert out[0] is log1
-        assert out[2] is log2
+        # Batch lands at its first member's position; texts keep their order.
+        assert [e["type"] for e in out] == ["text", "metric_batch", "text"]
+        assert out[0] is text1
+        assert out[2] is text2
 
     def test_tags_change_cuts_batch(self):
         events = [
@@ -129,15 +129,15 @@ class TestCoalesce:
 
     def test_empty_and_no_metrics(self):
         assert coalesce([]) == []
-        logs = [{"type": "log", "message": "x"}]
-        assert coalesce(logs) == logs
+        texts = [{"type": "text", "message": "x"}]
+        assert coalesce(texts) == texts
 
 
 class TestSnapshotCoalescing:
     def test_progress_last_wins_per_loggable(self):
         events = [
             {"type": "progress", "loggable_id": "a", "data": {"current": 1}},
-            {"type": "log", "message": "between"},
+            {"type": "text", "message": "between"},
             {"type": "progress", "loggable_id": "a", "data": {"current": 2}},
             {"type": "progress", "loggable_id": "b", "data": {"current": 9}},
             {"type": "progress", "loggable_id": "a", "data": {"current": 3}},
@@ -147,9 +147,9 @@ class TestSnapshotCoalescing:
         assert len(progress) == 2
         by_lid = {e["loggable_id"]: e["data"]["current"] for e in progress}
         assert by_lid == {"a": 3, "b": 9}
-        # Survivor sits at the first occurrence's position (before the log).
+        # Survivor sits at the first occurrence's position (before the text).
         assert out[0]["type"] == "progress" and out[0]["data"]["current"] == 3
-        assert out[1]["type"] == "log"
+        assert out[1]["type"] == "text"
 
     def test_snapshot_metrics_last_wins_per_series(self):
         events = [

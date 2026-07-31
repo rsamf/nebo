@@ -8,7 +8,7 @@ import { buildEmbeddedUrl } from '@/hooks/useEmbeddedView'
  * What the card represents in the grid view. Used to pick the right
  * URL-param slice when building an iframe URL via `buildEmbeddedUrl`.
  */
-export type GridCardKind = 'logs' | 'metric' | 'image' | 'audio'
+export type GridCardKind = 'text' | 'metric' | 'image' | 'audio'
 
 interface GridCardContextMenuProps {
   isOpen: boolean
@@ -17,7 +17,7 @@ interface GridCardContextMenuProps {
   runId: string
   kind: GridCardKind
   loggableId: string
-  // Only set for metric / image / audio cards. Ignored for the logs panel.
+  // The stream/metric/media name this card shows.
   name?: string
 }
 
@@ -37,8 +37,8 @@ export function GridCardContextMenu({
     const node = loggableId === '__global__' ? undefined : loggableId
     const spec = (() => {
       switch (kind) {
-        case 'logs':
-          return { runId, node, logs: true }
+        case 'text':
+          return { runId, node, text: name ?? true }
         case 'metric':
           return { runId, node, metric: name }
         case 'image':

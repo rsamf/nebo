@@ -14,6 +14,34 @@ const MODALITY_LABELS: Record<StreamModality, string> = {
 }
 const MODALITIES = STREAM_MODALITIES
 
+// Modality toggle chips. Desktop renders them in the tree column under the
+// stream search field (hidden while the tracker is collapsed); mobile puts
+// them in the Filters popover.
+export function ModalityChips({ activeModalities, onToggleModality }: {
+  activeModalities: Set<StreamModality>
+  onToggleModality: (m: StreamModality) => void
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-0.5">
+      {MODALITIES.map(m => {
+        const active = activeModalities.has(m)
+        return (
+          <Badge
+            key={m}
+            variant={active ? 'default' : 'outline'}
+            className="cursor-pointer select-none gap-0.5 px-1.5 py-0 text-[9px]"
+            style={active ? { backgroundColor: MODALITY_COLORS[m], borderColor: MODALITY_COLORS[m] } : undefined}
+            onClick={() => onToggleModality(m)}
+          >
+            <span className="inline-block h-1 w-1 rounded-full" style={{ backgroundColor: active ? '#fff' : MODALITY_COLORS[m] }} />
+            {MODALITY_LABELS[m]}
+          </Badge>
+        )
+      })}
+    </div>
+  )
+}
+
 interface Props {
   minStep: number
   maxStep: number
@@ -56,27 +84,6 @@ export function TrackerControls({ minStep, maxStep, hasSteps, activeModalities, 
     return () => window.removeEventListener('keydown', handler)
   }, [hasSteps, stepBy])
 
-  // Filter controls reused inline (desktop) or inside the mobile menu popover.
-  const chips = (
-    <div className="flex flex-wrap items-center gap-1">
-      {MODALITIES.map(m => {
-        const active = activeModalities.has(m)
-        return (
-          <Badge
-            key={m}
-            variant={active ? 'default' : 'outline'}
-            className="cursor-pointer select-none gap-1 px-2 py-0.5 text-[10px]"
-            style={active ? { backgroundColor: MODALITY_COLORS[m], borderColor: MODALITY_COLORS[m] } : undefined}
-            onClick={() => onToggleModality(m)}
-          >
-            <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ backgroundColor: active ? '#fff' : MODALITY_COLORS[m] }} />
-            {MODALITY_LABELS[m]}
-          </Badge>
-        )
-      })}
-    </div>
-  )
-
   const modeSelect = (triggerClass: string) => (
     <Select value={timeline.mode} onValueChange={(v) => setMode(v as 'time' | 'step')}>
       <SelectTrigger className={triggerClass}><SelectValue /></SelectTrigger>
@@ -90,10 +97,7 @@ export function TrackerControls({ minStep, maxStep, hasSteps, activeModalities, 
   return (
     <div className="flex items-center gap-2 border-b border-border bg-background px-2 py-1.5 shrink-0">
       {isDesktop ? (
-        <>
-          {chips}
-          {modeSelect('h-7 w-[88px] text-xs')}
-        </>
+        modeSelect('h-7 w-[88px] text-xs')
       ) : (
         // Mobile: fold the filter controls into a single menu popover.
         <Popover>
@@ -109,7 +113,7 @@ export function TrackerControls({ minStep, maxStep, hasSteps, activeModalities, 
             </div>
             <div className="space-y-1.5">
               <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Modalities</div>
-              {chips}
+              <ModalityChips activeModalities={activeModalities} onToggleModality={onToggleModality} />
             </div>
             <div className="space-y-1.5">
               <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Axis</div>

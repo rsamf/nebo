@@ -11,7 +11,6 @@ interface ComparisonGroupCardProps {
 
 export function ComparisonGroupCard({ group, selected, onClick }: ComparisonGroupCardProps) {
   const runColors = useStore(s => s.runColors)
-  const runNames = useStore(s => s.runNames)
   const runs = useStore(s => s.runs)
   const removeComparisonGroup = useStore(s => s.removeComparisonGroup)
 
@@ -44,8 +43,6 @@ export function ComparisonGroupCard({ group, selected, onClick }: ComparisonGrou
   }, [editing])
 
   const runDisplayNames = group.runIds.map(rid => {
-    const custom = runNames.get(rid)
-    if (custom) return { name: custom, color: runColors.get(rid) ?? '#60a5fa' }
     const run = runs.get(rid)
     const scriptName = run?.summary.run_name || run?.summary.script_path.split('/').pop() || rid
     return { name: scriptName, color: runColors.get(rid) ?? '#60a5fa' }

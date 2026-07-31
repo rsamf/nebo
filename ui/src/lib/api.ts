@@ -1,4 +1,5 @@
 import { authHeaders, getAuthToken, setUnauthorized } from './auth'
+import { parseRef, type NeboRef } from './refs'
 
 const BASE = ''
 
@@ -46,7 +47,7 @@ export interface RunSummary {
   last_event_at: number | null
   node_count: number
   edge_count: number
-  log_count: number
+  text_count: number
   run_name: string | null
   run_config?: Record<string, unknown>
   metric_series_count?: number
@@ -76,33 +77,14 @@ export interface TreeData {
 
 export const EMPTY_TREE: TreeData = { groups: {}, runs: {} }
 
-/** A parsed `nebo://` deep link (used in group docs). */
-export type NeboLink =
-  | { kind: 'run'; runId: string; step: number | null }
-  | { kind: 'group'; path: string }
+/** A parsed `nebo://` deep link. Canonical grammar lives in `lib/refs.ts`
+ *  (`nebo://run/<id>[/<loggable>[/<name...>]][@<step>]`, `nebo://group/<path>`);
+ *  this re-export keeps existing import sites working. */
+export type NeboLink = NeboRef
 
-/** Parse a `nebo://run/<id>[?step=<n>]` or `nebo://group/<path>` href, or
- *  null if it isn't a recognized nebo link. */
+/** Parse a `nebo://` href, or null if it isn't a recognized nebo link. */
 export function parseNeboLink(href: string): NeboLink | null {
-  if (!href.startsWith('nebo://')) return null
-  const [pathPart, query] = href.slice('nebo://'.length).split('?')
-  if (pathPart.startsWith('run/')) {
-    const runId = pathPart.slice('run/'.length)
-    if (!runId) return null
-    let step: number | null = null
-    if (query) {
-      const raw = new URLSearchParams(query).get('step')
-      if (raw !== null && raw !== '' && Number.isFinite(Number(raw))) {
-        step = Number(raw)
-      }
-    }
-    return { kind: 'run', runId, step }
-  }
-  if (pathPart.startsWith('group/')) {
-    const path = pathPart.slice('group/'.length).replace(/\/+$/, '')
-    return path ? { kind: 'group', path } : null
-  }
-  return null
+  return parseRef(href)
 }
 
 export interface GraphData {
@@ -132,12 +114,11 @@ export interface UiConfig {
   tracker?: 'time' | 'step'
 }
 
-export interface LogEntry {
+export interface TextEntry {
   timestamp: number
   node: string | null
   name: string
   message: string
-  level: string
   step: number | null
 }
 
@@ -163,6 +144,10 @@ export interface MetricEntry {
 export interface LoggableMetricSeries {
   type: MetricType
   entries: MetricEntry[]
+  // Set by GET /runs/{id}/metrics: how many points the daemon holds for
+  // this series, and whether `entries` is a decimated subset of them.
+  total_points?: number
+  downsampled?: boolean
 }
 
 export interface LabelGroup<T> {
@@ -206,7 +191,7 @@ export interface NodeDetail {
   exec_count: number
   is_source: boolean
   params: Record<string, unknown>
-  recent_logs: unknown[]
+  recent_texts: unknown[]
   metrics: Record<string, LoggableMetricSeries>
   progress: { current: number; total: number; name?: string } | null
 }
@@ -214,7 +199,7 @@ export interface NodeDetail {
 // Loggable = node-or-non-node addressable thing that can receive logs, metrics,
 // images, audio, etc. `graph.nodes` only contains node-kind loggables; the
 // per-run store slices (loggableMetrics, etc.) are keyed by loggableId and may
-// contain any kind. Non-node kinds: `global` (user logs outside any node),
+// contain any kind. Non-node kinds: `global` (entries logged outside any node),
 // `agent` (entries authored over MCP by an external agent).
 export type LoggableState = NodeDetail & {
   kind: 'node' | 'global' | 'agent'
@@ -236,14 +221,21 @@ export const api = {
   listRuns: () => get<{ runs: RunSummary[]; active_run: string | null }>('/runs'),
   getRun: (id: string) => get<RunSummary>(`/runs/${id}`),
   getRunGraph: (id: string) => get<GraphData>(`/runs/${id}/graph`),
-  getRunLogs: (id: string, opts?: { loggable_id?: string; limit?: number }) => {
+  getRunText: (id: string, opts?: { loggable_id?: string; limit?: number }) => {
     const params = new URLSearchParams()
     if (opts?.loggable_id) params.set('loggable_id', opts.loggable_id)
     if (opts?.limit) params.set('limit', String(opts.limit))
     const qs = params.toString()
-    return get<{ logs: LogEntry[] }>(`/runs/${id}/logs${qs ? `?${qs}` : ''}`)
+    return get<{ texts: TextEntry[] }>(`/runs/${id}/text${qs ? `?${qs}` : ''}`)
   },
-  getRunMetrics: (id: string) => get<{ metrics: Record<string, Record<string, LoggableMetricSeries>> }>(`/runs/${id}/metrics`),
+  // The daemon caps accumulating series at ~2k points per series by
+  // default (server-side min/max decimation) so a million-point run
+  // doesn't arrive as one ~70 MB JSON body. `points: 0` requests full
+  // fidelity.
+  getRunMetrics: (id: string, opts?: { points?: number }) =>
+    get<{ metrics: Record<string, Record<string, LoggableMetricSeries>> }>(
+      `/runs/${id}/metrics${opts?.points != null ? `?points=${opts.points}` : ''}`,
+    ),
   getRunImages: (id: string) => get<{ images: Record<string, Array<{ node: string; media_id: string; name: string; step: number | null; timestamp: number; labels?: LabelsPayload | null }>> }>(`/runs/${id}/images`),
   getRunAudio: (id: string) => get<{ audio: Record<string, Array<{ node: string; media_id: string; name: string; sr: number; step: number | null; timestamp: number }>> }>(`/runs/${id}/audio`),
   getRunAlerts: (id: string) => get<{ alerts: AlertEntry[] }>(`/runs/${id}/alerts`),

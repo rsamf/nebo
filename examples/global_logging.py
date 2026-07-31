@@ -1,8 +1,8 @@
-"""Example: Global logging — nb.log* outside any @nb.fn() context.
+"""Example: Global logging — nb.log_* outside any @nb.fn() context.
 
 Calls made outside a decorated function land on the Global loggable, which
 appears as its own card at the top of the flat view (never in the DAG).
-This example emits logs, metrics, a text snippet, and an image at module /
+This example emits text streams, metrics, and an image at module /
 main-function scope so you can see each tab populated under the Global card.
 """
 
@@ -16,14 +16,14 @@ import nebo as nb
 def main() -> None:
     nb.md(
         "# Global logging demo\n\n"
-        "This run emits logs, metrics, text, and an image from outside any "
+        "This run emits text streams, metrics, and an image from outside any "
         "`@nb.fn()` function. They all land on the Global loggable."
     )
     nb.ui(view="flat")
-    # ── Plain text logs at the Global level ───────────────────────────────────
-    nb.log("pipeline starting")
-    nb.log("loading config from env")
-    nb.log("env looks healthy — proceeding")
+    # ── Text streams at the Global level ─────────────────────────────────────
+    nb.log_text("status", "pipeline starting")
+    nb.log_text("status", "loading config from env")
+    nb.log_text("status", "env looks healthy — proceeding")
 
     # ── Scalar metrics at the Global level ────────────────────────────────────
     # Auto-step counter, one series per name.
@@ -32,7 +32,7 @@ def main() -> None:
         nb.log_line("global_cost", 1.0 / (1 + step))
 
     # ── Multi-line text snippet on the Global loggable ───────────────────────
-    nb.log("env report:\n- python: OK\n- gpu: absent (CPU path)\n- cache: warm")
+    nb.log_text("env_report", "env report:\n- python: OK\n- gpu: absent (CPU path)\n- cache: warm")
 
     # ── Image on the Global loggable ──────────────────────────────────────────
     xx, yy = np.meshgrid(np.linspace(-3, 3, 128), np.linspace(-3, 3, 128))

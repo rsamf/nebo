@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useStore } from '@/store'
-import type { LogEntry } from '@/lib/api'
+import type { TextEntry } from '@/lib/api'
 import {
   buildStreamPath, buildStreamTree, streamPrefixFor,
   type StreamLeaf, type StreamModality, type StreamModel,
@@ -28,14 +28,14 @@ const EMPTY_MODEL: StreamModel = {
 }
 
 // Incremental accumulator per run. The store appends immutably
-// (`[...logs, ...newLogs]` preserves entry identity), so when the new
-// logs array extends the processed one we only push the tail instead of
+// (`[...texts, ...newTexts]` preserves entry identity), so when the new
+// texts array extends the processed one we only push the tail instead of
 // re-walking every entry on every WS batch. Counter-based and therefore
 // idempotent — a memo re-invocation with the same array appends nothing.
 interface StreamCache {
   prefixKey: string
-  logsProcessed: number
-  lastLog: LogEntry | undefined
+  textsProcessed: number
+  lastText: TextEntry | undefined
   imagesRef: unknown
   audioRef: unknown
   acc: Map<string, StreamLeaf>
@@ -47,7 +47,7 @@ export function useStreams(runId: string | null, enabled = true): StreamModel {
   // model only recomputes when a field it actually reads changes (the
   // run object itself is cloned on every mutation, including ones —
   // like metric appends — that streams don't care about).
-  const logs = useStore(s => (runId ? s.runs.get(runId)?.logs : undefined))
+  const texts = useStore(s => (runId ? s.runs.get(runId)?.texts : undefined))
   const loggableImages = useStore(s => (runId ? s.runs.get(runId)?.loggableImages : undefined))
   const loggableAudio = useStore(s => (runId ? s.runs.get(runId)?.loggableAudio : undefined))
   const graphNodes = useStore(s => (runId ? s.runs.get(runId)?.graph?.nodes : undefined))
@@ -71,20 +71,20 @@ export function useStreams(runId: string | null, enabled = true): StreamModel {
     const prefixKey = [...prefixes.entries()].map(([k, v]) => `${k}→${v}`).join('|')
 
     let cache = cacheByRun.get(runId)
-    const extendsLogs =
+    const extendsTexts =
       cache !== undefined
       && cache.prefixKey === prefixKey
       && cache.imagesRef === loggableImages
       && cache.audioRef === loggableAudio
-      && logs !== undefined
-      && logs.length >= cache.logsProcessed
-      && (cache.logsProcessed === 0 || logs[cache.logsProcessed - 1] === cache.lastLog)
+      && texts !== undefined
+      && texts.length >= cache.textsProcessed
+      && (cache.textsProcessed === 0 || texts[cache.textsProcessed - 1] === cache.lastText)
 
-    if (!cache || !extendsLogs) {
+    if (!cache || !extendsTexts) {
       cache = {
         prefixKey,
-        logsProcessed: 0,
-        lastLog: undefined,
+        textsProcessed: 0,
+        lastText: undefined,
         imagesRef: loggableImages,
         audioRef: loggableAudio,
         acc: new Map(),
@@ -115,22 +115,22 @@ export function useStreams(runId: string | null, enabled = true): StreamModel {
       leaf.maxTime = Math.max(leaf.maxTime, timestamp)
     }
 
-    if (cache.logsProcessed === 0) {
+    if (cache.textsProcessed === 0) {
       // Fresh accumulator: walk everything once.
       if (loggableImages) for (const [id, imgs] of Object.entries(loggableImages)) for (const img of imgs) push(id, 'image', img.name, img.step ?? null, img.timestamp)
       if (loggableAudio) for (const [id, entries] of Object.entries(loggableAudio)) for (const a of entries) push(id, 'audio', a.name, a.step ?? null, a.timestamp)
     }
-    if (logs) {
-      for (let i = cache.logsProcessed; i < logs.length; i++) {
-        const l = logs[i]
-        push(l.node ?? '__global__', 'text', l.name, l.step ?? null, l.timestamp)
+    if (texts) {
+      for (let i = cache.textsProcessed; i < texts.length; i++) {
+        const t = texts[i]
+        push(t.node ?? '__global__', 'text', t.name, t.step ?? null, t.timestamp)
       }
-      cache.logsProcessed = logs.length
-      cache.lastLog = logs[logs.length - 1]
+      cache.textsProcessed = texts.length
+      cache.lastText = texts[texts.length - 1]
     }
 
     const leaves = [...acc.values()]
     const byPath = new Map(leaves.map(l => [l.path, l]))
     return { tree: buildStreamTree(leaves), leaves, byPath }
-  }, [enabled, runId, logs, loggableImages, loggableAudio, graphNodes, globalId, agentId])
+  }, [enabled, runId, texts, loggableImages, loggableAudio, graphNodes, globalId, agentId])
 }

@@ -16,7 +16,6 @@ interface ComparisonGridProps {
 
 export function ComparisonGrid({ runIds, children, fillParent }: ComparisonGridProps) {
   const runColors = useStore(s => s.runColors)
-  const runNames = useStore(s => s.runNames)
   const runs = useStore(s => s.runs)
 
   // No runs to compare → render nothing (rather than the legacy
@@ -42,8 +41,10 @@ export function ComparisonGrid({ runIds, children, fillParent }: ComparisonGridP
 
         const color = runColors.get(runId) ?? '#60a5fa'
         const run = runs.get(runId)
-        const scriptName = run?.summary.script_path.split('/').pop() ?? runId
-        const displayName = runNames.get(runId) || scriptName
+        const displayName =
+          run?.summary.run_name ||
+          run?.summary.script_path.split('/').pop() ||
+          runId
 
         return (
           <div

@@ -5,7 +5,7 @@ import { LoggableTabContainer } from '@/components/node-tabs/LoggableTabContaine
 import { MobileSheet } from './MobileSheet'
 import { loggableDisplayName } from './util'
 
-// Bottom sheet for one loggable: the full desktop tab set (Logs /
+// Bottom sheet for one loggable: the full desktop tab set (Text /
 // Metrics / Images / Audio) inside a fixed-height sheet.
 export function MobileNodeSheet({
   runId,

@@ -25,14 +25,14 @@ type NodePreview =
   | { kind: 'image'; image: ImageEntry }
   | { kind: 'audio'; audio: AudioEntry }
   | { kind: 'metric'; series: LoggableMetricSeries }
-  | { kind: 'logs'; line: string }
+  | { kind: 'text'; line: string }
   | null
 
-const PREVIEW_HEIGHT: Record<'image' | 'audio' | 'metric' | 'logs', number> = {
+const PREVIEW_HEIGHT: Record<'image' | 'audio' | 'metric' | 'text', number> = {
   image: 104,
   audio: 44,
   metric: 42,
-  logs: 34,
+  text: 34,
 }
 
 interface LaidNode {
@@ -67,31 +67,31 @@ export function MobileDagCanvas({
   const layout = useMemo(() => {
     if (!graph || Object.keys(graph.nodes).length === 0) return null
 
-    // One backward walk over the (possibly 10k+) log array shared by all
-    // nodes that fall through to a log-line preview, instead of a scan
+    // One backward walk over the (possibly 10k+) text array shared by all
+    // nodes that fall through to a text-line preview, instead of a scan
     // per node.
-    const lastLogLines = new Map<string, string>()
-    const resolveLogLines = (ids: Set<string>) => {
-      const logs = run?.logs ?? []
-      for (let i = logs.length - 1; i >= 0 && ids.size > 0; i--) {
-        const node = logs[i].node
+    const lastTextLines = new Map<string, string>()
+    const resolveTextLines = (ids: Set<string>) => {
+      const texts = run?.texts ?? []
+      for (let i = texts.length - 1; i >= 0 && ids.size > 0; i--) {
+        const node = texts[i].node
         if (node && ids.has(node)) {
-          lastLogLines.set(node, logs[i].message)
+          lastTextLines.set(node, texts[i].message)
           ids.delete(node)
         }
       }
     }
-    const needLogs = new Set<string>()
+    const needTexts = new Set<string>()
     for (const id of Object.keys(graph.nodes)) {
       if (
         !run?.loggableImages[id]?.length &&
         !run?.loggableAudio[id]?.length &&
         !firstSeriesFor(loggableMetrics, id)
       ) {
-        needLogs.add(id)
+        needTexts.add(id)
       }
     }
-    if (needLogs.size > 0) resolveLogLines(needLogs)
+    if (needTexts.size > 0) resolveTextLines(needTexts)
 
     const previewFor = (id: string): NodePreview => {
       const image = nearestAtStep(run?.loggableImages[id], timelineStep)
@@ -100,8 +100,8 @@ export function MobileDagCanvas({
       if (audio) return { kind: 'audio', audio }
       const series = firstSeriesFor(loggableMetrics, id)
       if (series) return { kind: 'metric', series }
-      const line = lastLogLines.get(id)
-      if (line) return { kind: 'logs', line }
+      const line = lastTextLines.get(id)
+      if (line) return { kind: 'text', line }
       return null
     }
     const g = new dagre.graphlib.Graph()
@@ -174,15 +174,29 @@ export function MobileDagCanvas({
   // Initial fit: scale the graph's width into the viewport, but never
   // below a readable floor — illegible fit-zoom was the baseline's pain
   // point, so very wide graphs start readable and pan instead.
+  // A zero-width container (hidden tab, iframe that hasn't laid out yet)
+  // can't be fitted; a ResizeObserver retries once real bounds arrive —
+  // for a finished run `layout` never recomputes, so without the retry
+  // the canvas would stay stuck at scale 1 / origin 0,0.
   useEffect(() => {
     if (!layout || fittedFor.current === runId) return
     const el = containerRef.current
     if (!el) return
-    const vw = el.clientWidth
-    if (vw <= 0) return
-    const scale = Math.max(0.55, Math.min(1, (vw - 16) / layout.width))
-    setView({ x: Math.min(8, (vw - layout.width * scale) / 2), y: 12, scale })
-    fittedFor.current = runId
+    const fit = () => {
+      if (fittedFor.current === runId) return true
+      const vw = el.clientWidth
+      if (vw <= 0) return false
+      const scale = Math.max(0.55, Math.min(1, (vw - 16) / layout.width))
+      setView({ x: Math.min(8, (vw - layout.width * scale) / 2), y: 12, scale })
+      fittedFor.current = runId
+      return true
+    }
+    if (fit()) return
+    const ro = new ResizeObserver(() => {
+      if (fit()) ro.disconnect()
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
   }, [layout, runId])
 
   const clampScale = (s: number) => Math.max(MIN_SCALE, Math.min(MAX_SCALE, s))
@@ -347,7 +361,7 @@ export function MobileDagCanvas({
                 className="mt-2"
               />
             )}
-            {n.preview?.kind === 'logs' && (
+            {n.preview?.kind === 'text' && (
               <div className="mt-2 line-clamp-2 font-mono text-[10px] leading-snug text-muted-foreground">
                 {n.preview.line}
               </div>

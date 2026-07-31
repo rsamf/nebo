@@ -1,3 +1,3 @@
 import nebo as nb
 
-nb.log("Hello world!")
+nb.log_text("hello", "Hello world!")

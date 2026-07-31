@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { RunSummary, GraphData, LogEntry, LabelsPayload, MetricType, MetricEntry, LoggableMetricSeries, TreeData, AlertEntry } from '@/lib/api'
+import type { RunSummary, GraphData, TextEntry, LabelsPayload, MetricType, MetricEntry, LoggableMetricSeries, TreeData, AlertEntry } from '@/lib/api'
 import { EMPTY_TREE, parseNeboLink } from '@/lib/api'
 import type { WsEvent } from '@/lib/ws'
 import { assignColor } from '@/lib/colors'
@@ -79,7 +79,7 @@ const initialSettings = loadSettings()
 // Apply persisted theme on load
 document.documentElement.classList.toggle('dark', initialSettings.theme === 'dark')
 
-export type NodeTab = 'logs' | 'metrics' | 'images' | 'audio'
+export type NodeTab = 'text' | 'metrics' | 'images' | 'audio'
 
 export interface ImageEntry {
   node: string
@@ -139,7 +139,7 @@ export interface ComparisonGroup {
 export interface RunState {
   summary: RunSummary
   graph: GraphData | null
-  logs: LogEntry[]
+  texts: TextEntry[]
   loggableMetrics: Record<string, Record<string, LoggableMetricSeries>>
   loggableImages: Record<string, ImageEntry[]>
   loggableAudio: Record<string, AudioEntry[]>
@@ -167,8 +167,10 @@ interface NeboStore {
   // deselected (comparison removal).
   autoSelected: boolean
 
-  runNames: Map<string, string>  // client-side custom display names
-  setRunName: (runId: string, name: string) => void
+  // Runs whose REST hydration is in flight — the UI shows a "loading
+  // history…" hint so a partially-rendered run reads as loading, not done.
+  hydratingRuns: Set<string>
+  setRunHydrating: (runId: string, hydrating: boolean) => void
 
   runColors: Map<string, string>
   nextColorIndex: number
@@ -186,10 +188,15 @@ interface NeboStore {
   // Distinct from GraphData.nodes[].group (intra-run node clustering).
   runTree: TreeData
   setRunTree: (tree: TreeData) => void
-  // A group page is shown when selectedGroup is set; it and selectedRunId are
-  // mutually exclusive (selecting one clears the other).
+  // Mobile-only: a group page is shown when selectedGroup is set; it and
+  // selectedRunId are mutually exclusive (selecting one clears the other).
+  // Desktop has no group page — groups only expand/collapse in the tree.
   selectedGroup: string | null
   selectGroup: (path: string | null) => void
+  // Desktop: a group doc selected from the run tree, rendered by the
+  // dedicated markdown viewer in place of the run detail view.
+  selectedDoc: { group: string; name: string } | null
+  selectDoc: (doc: { group: string; name: string } | null) => void
   expandedGroups: Set<string>
   toggleGroupExpanded: (path: string) => void
   // Handle a nebo:// deep link clicked in a group doc.
@@ -197,6 +204,12 @@ interface NeboStore {
   // Ephemeral notice (e.g. a nebo:// target that no longer exists).
   notice: string | null
   setNotice: (msg: string | null) => void
+  // A nebo:// deep link's target within a run, pending resolution by the
+  // flat view: it switches to the owning tab, scrolls the card into view,
+  // and highlights it. `name` is the stream/metric/media name when the
+  // link addressed one; null means "this loggable's first card".
+  pendingNavTarget: { loggableId: string; name: string | null } | null
+  setPendingNavTarget: (target: { loggableId: string; name: string | null } | null) => void
 
   // Node interaction (graph view)
   layoutTrigger: number
@@ -223,14 +236,14 @@ interface NeboStore {
   toggleNodeCollapsed: (runId: string, nodeId: string) => void
 
   // User-selected tab per (run, loggable). Absence falls back to
-  // ui_hints.default_tab (logs default) the way LoggableTabContainer
+  // ui_hints.default_tab (text default) the way LoggableTabContainer
   // resolves it. Lifted into the store so the export feature can
   // honor the user's currently-clicked tab in the diagram render.
   selectedTabs: Map<string, Map<string, NodeTab>>
   setSelectedTab: (runId: string, loggableId: string, tab: NodeTab) => void
 
   // Soft cap applied while an export is rendering its offscreen tree —
-  // tab panels (logs / images / audio / metrics) read this and slice
+  // tab panels (text / images / audio / metrics) read this and slice
   // their item lists down to N. `null` disables the cap. The export
   // orchestrator sets this before mounting and resets it in finally,
   // so the live UI is only affected during the brief export window.
@@ -269,8 +282,8 @@ interface NeboStore {
   setRuns: (summaries: RunSummary[], activeRunId: string | null) => void
   updateRunSummary: (summary: RunSummary) => void
   setRunGraph: (runId: string, graph: GraphData) => void
-  setRunLogs: (runId: string, logs: LogEntry[]) => void
-  appendRunLog: (runId: string, log: LogEntry) => void
+  setRunTexts: (runId: string, texts: TextEntry[]) => void
+  appendRunText: (runId: string, text: TextEntry) => void
   setRunMetrics: (runId: string, metrics: Record<string, Record<string, LoggableMetricSeries>>) => void
   setRunImages: (runId: string, images: Record<string, ImageEntry[]>) => void
   setRunAudio: (runId: string, audio: Record<string, AudioEntry[]>) => void
@@ -302,15 +315,13 @@ export const useStore = create<NeboStore>((set, get) => ({
   activeRunId: null,
   autoSelected: false,
 
-  runNames: new Map(),
-  setRunName: (runId, name) => set(state => {
-    const next = new Map(state.runNames)
-    if (name.trim()) {
-      next.set(runId, name.trim())
-    } else {
-      next.delete(runId)
-    }
-    return { runNames: next }
+  hydratingRuns: new Set<string>(),
+  setRunHydrating: (runId, hydrating) => set(state => {
+    if (state.hydratingRuns.has(runId) === hydrating) return {}
+    const next = new Set(state.hydratingRuns)
+    if (hydrating) next.add(runId)
+    else next.delete(runId)
+    return { hydratingRuns: next }
   }),
 
   runColors: new Map(),
@@ -343,10 +354,8 @@ export const useStore = create<NeboStore>((set, get) => ({
     const id = `cmp:${Date.now()}`
     const state = get()
     const names = runIds.map(rid => {
-      const custom = state.runNames.get(rid)
-      if (custom) return custom
       const run = state.runs.get(rid)
-      return run?.summary.script_path.split('/').pop() ?? rid
+      return run?.summary.run_name || (run?.summary.script_path.split('/').pop() ?? rid)
     })
     const title = names.length <= 2
       ? `Compare: ${names.join(' vs ')}`
@@ -366,7 +375,9 @@ export const useStore = create<NeboStore>((set, get) => ({
   }),
 
   layoutTrigger: 0,
-  dagDirection: 'TB',
+  // Desktop defaults to a horizontal DAG; mobile's canvas hardcodes
+  // top-to-bottom independently (MobileDagCanvas).
+  dagDirection: 'LR',
   toggleDagDirection: () => set(state => ({
     dagDirection: state.dagDirection === 'TB' ? 'LR' : 'TB',
     layoutTrigger: state.layoutTrigger + 1,
@@ -427,7 +438,9 @@ export const useStore = create<NeboStore>((set, get) => ({
   viewMode: 'flat' as 'graph' | 'flat',
   setViewMode: (mode) => set({ viewMode: mode }),
 
-  rightPanelOpen: false,
+  // Open by default: the right panel is the home of a run's markdown,
+  // config, and settings on desktop.
+  rightPanelOpen: true,
   toggleRightPanel: () => set(state => ({ rightPanelOpen: !state.rightPanelOpen })),
 
   timeline: { mode: 'time', step: null, time: null, selectedStream: null },
@@ -441,6 +454,8 @@ export const useStore = create<NeboStore>((set, get) => ({
   setRunTree: (tree) => set({ runTree: tree }),
   selectedGroup: null,
   selectGroup: (path) => set({ selectedGroup: path, selectedRunId: null }),
+  selectedDoc: null,
+  selectDoc: (doc) => set({ selectedDoc: doc }),
   expandedGroups: new Set<string>(),
   toggleGroupExpanded: (path) => set(state => {
     const next = new Set(state.expandedGroups)
@@ -456,20 +471,42 @@ export const useStore = create<NeboStore>((set, get) => ({
         set({ notice: `Run ${link.runId} isn't loaded on this daemon.` })
         return
       }
-      set({ selectedRunId: link.runId, selectedGroup: null })
+      // Clearing selectedDoc matters when the link was clicked *inside*
+      // the doc viewer — otherwise the run selects behind a doc that
+      // stays on screen.
+      set({ selectedRunId: link.runId, selectedGroup: null, selectedDoc: null })
       if (link.step !== null) {
         set(state => ({ timeline: { ...state.timeline, mode: 'step', step: link.step } }))
+      }
+      if (link.loggableId) {
+        // Deterministic destination for loggable/stream links: always the
+        // Flat view (every loggable has a card there, unlike the DAG),
+        // then LoggableGridView switches to the owning tab, scrolls to the
+        // card, and highlights it.
+        set({
+          viewMode: 'flat',
+          pendingNavTarget: { loggableId: link.loggableId, name: link.name },
+        })
       }
     } else {
       if (!(link.path in get().runTree.groups)) {
         set({ notice: `Group ${link.path} no longer exists.` })
         return
       }
-      set({ selectedGroup: link.path, selectedRunId: null })
+      // No dedicated group view — reveal the group in the run tree by
+      // expanding it and every ancestor.
+      set(state => {
+        const next = new Set(state.expandedGroups)
+        const parts = link.path.split('/')
+        for (let i = 1; i <= parts.length; i++) next.add(parts.slice(0, i).join('/'))
+        return { expandedGroups: next }
+      })
     }
   },
   notice: null,
   setNotice: (msg) => set({ notice: msg }),
+  pendingNavTarget: null,
+  setPendingNavTarget: (target) => set({ pendingNavTarget: target }),
 
   settings: initialSettings,
 
@@ -510,7 +547,7 @@ export const useStore = create<NeboStore>((set, get) => ({
         runs.set(s.id, {
           summary: s,
           graph: null,
-          logs: [],
+          texts: [],
           loggableMetrics: {},
           loggableImages: {},
           loggableAudio: {},
@@ -594,17 +631,17 @@ export const useStore = create<NeboStore>((set, get) => ({
     return patch
   }),
 
-  setRunLogs: (runId, logs) => set(state => {
+  setRunTexts: (runId, texts) => set(state => {
     const runs = new Map(state.runs)
     const run = runs.get(runId)
-    if (run) runs.set(runId, { ...run, logs })
+    if (run) runs.set(runId, { ...run, texts })
     return { runs }
   }),
 
-  appendRunLog: (runId, log) => set(state => {
+  appendRunText: (runId, text) => set(state => {
     const runs = new Map(state.runs)
     const run = runs.get(runId)
-    if (run) runs.set(runId, { ...run, logs: [...run.logs, log] })
+    if (run) runs.set(runId, { ...run, texts: [...run.texts, text] })
     return { runs }
   }),
 
@@ -759,7 +796,7 @@ export const useStore = create<NeboStore>((set, get) => ({
     return { runs }
   }),
 
-  selectRun: (runId) => set({ selectedRunId: runId, selectedGroup: null }),
+  selectRun: (runId) => set({ selectedRunId: runId, selectedGroup: null, selectedDoc: null }),
   requestLayout: () => set(state => ({ layoutTrigger: state.layoutTrigger + 1 })),
 
   updateNodePosition: (runId, nodeId, pos) => set(state => {
@@ -801,11 +838,11 @@ export const useStore = create<NeboStore>((set, get) => ({
             last_event_at: Date.now() / 1000,
             node_count: 0,
             edge_count: 0,
-            log_count: 0,
+            text_count: 0,
             run_name: null,
           },
           graph: null,
-          logs: [],
+          texts: [],
           loggableMetrics: {},
           loggableImages: {},
           loggableAudio: {},
@@ -822,8 +859,22 @@ export const useStore = create<NeboStore>((set, get) => ({
       run.summary = { ...run.summary, last_event_at: Date.now() / 1000 }
       runs.set(runId, run)
 
-      // Accumulate new logs so we can spread once at the end
-      const newLogs: LogEntry[] = []
+      // Accumulate new text entries so we can spread once at the end
+      const newTexts: TextEntry[] = []
+
+      // Accumulating-metric appends are pooled per (loggable, name) and
+      // applied in ONE spread per series after the loop — N plain metric
+      // events in a batch cost O(n + N), not N × O(n). Snapshot types
+      // (bar/pie/histogram) still overwrite inline.
+      const pendingMetrics = new Map<string, {
+        lid: string; name: string; mtype: MetricType; entries: MetricEntry[]
+      }>()
+      const pushMetricEntries = (lid: string, name: string, mtype: MetricType, entries: MetricEntry[]) => {
+        const key = `${lid} ${name}`
+        const pending = pendingMetrics.get(key)
+        if (pending) pending.entries.push(...entries)
+        else pendingMetrics.set(key, { lid, name, mtype, entries })
+      }
 
       for (const event of events) {
         const etype = event.type
@@ -831,13 +882,13 @@ export const useStore = create<NeboStore>((set, get) => ({
         const data = (event.data ?? event) as Record<string, unknown>
 
         switch (etype) {
-          case 'log':
-            newLogs.push({
+          case 'text':
+          case 'log':  // legacy spelling from a mixed-version daemon
+            newTexts.push({
               timestamp: (event.timestamp as number) ?? Date.now() / 1000,
               node: loggableId ?? null,
               name: (event.name as string) ?? (data.name as string) ?? 'text',
               message: (event.message as string) ?? (data.message as string) ?? '',
-              level: (event.level as string) ?? 'info',
               step: (event.step as number) ?? null,
             })
             break
@@ -855,22 +906,20 @@ export const useStore = create<NeboStore>((set, get) => ({
             }
             const colorsFlag = (event.colors as boolean | undefined) ?? (data.colors as boolean | undefined)
             if (colorsFlag !== undefined) entry.colors = colorsFlag
-            // Immutable update so `useMemo([series.entries])` downstream fires
-            // on every change. Line and scatter accumulate (new entries
-            // append to the series); bar / pie / histogram are snapshots
-            // that overwrite prior emissions. This matches the daemon's
-            // persistence model in `nebo/server/daemon.py::_process_event`.
-            const existing = run.loggableMetrics[lid]?.[mname]
+            // Line and scatter accumulate — pooled and applied once after
+            // the loop. Bar / pie / histogram are snapshots that overwrite
+            // prior emissions immediately (immutable update so
+            // `useMemo([series.entries])` downstream fires). This matches
+            // the daemon's `nebo/server/daemon.py::_process_event`.
             const accumulates = mtype === 'line' || mtype === 'scatter'
-            const nextEntries =
-              !existing
-                ? [entry]
-                : accumulates
-                  ? [...existing.entries, entry]
-                  : [entry]
+            if (accumulates) {
+              pushMetricEntries(lid, mname, mtype, [entry])
+              break
+            }
+            const existing = run.loggableMetrics[lid]?.[mname]
             const nextSeries: LoggableMetricSeries = existing
-              ? { ...existing, entries: nextEntries }
-              : { type: mtype, entries: nextEntries }
+              ? { ...existing, entries: [entry] }
+              : { type: mtype, entries: [entry] }
             run.loggableMetrics = {
               ...run.loggableMetrics,
               [lid]: { ...(run.loggableMetrics[lid] ?? {}), [mname]: nextSeries },
@@ -881,8 +930,9 @@ export const useStore = create<NeboStore>((set, get) => ({
           case 'metric_batch': {
             // Columnar batch of accumulating-metric points (format v4):
             // parallel steps/timestamps/values arrays with whole-batch
-            // tags/colors. All N points append in ONE array spread, so a
-            // 1000-point batch costs O(n + 1000), not 1000 × O(n).
+            // tags/colors. Routed through the same per-series pending pool
+            // as plain metric events so ordering is uniform and each
+            // series costs one spread per WS batch.
             const lid = event.loggable_id as string | undefined
             if (!lid) break
             const mname = (event.name as string) ?? ''
@@ -903,17 +953,7 @@ export const useStore = create<NeboStore>((set, get) => ({
               return entry
             })
             if (batchEntries.length === 0) break
-            const existing = run.loggableMetrics[lid]?.[mname]
-            const nextEntries = existing
-              ? [...existing.entries, ...batchEntries]
-              : batchEntries
-            const nextSeries: LoggableMetricSeries = existing
-              ? { ...existing, entries: nextEntries }
-              : { type: mtype, entries: nextEntries }
-            run.loggableMetrics = {
-              ...run.loggableMetrics,
-              [lid]: { ...(run.loggableMetrics[lid] ?? {}), [mname]: nextSeries },
-            }
+            pushMetricEntries(lid, mname, mtype, batchEntries)
             break
           }
 
@@ -1103,9 +1143,21 @@ export const useStore = create<NeboStore>((set, get) => ({
         }
       }
 
-      // Batch-append accumulated logs
-      if (newLogs.length > 0) {
-        run.logs = [...run.logs, ...newLogs]
+      // Batch-append accumulated text entries
+      if (newTexts.length > 0) {
+        run.texts = [...run.texts, ...newTexts]
+      }
+
+      // Apply pooled accumulating-metric appends: one spread per series.
+      for (const p of pendingMetrics.values()) {
+        const existing = run.loggableMetrics[p.lid]?.[p.name]
+        const nextSeries: LoggableMetricSeries = existing
+          ? { ...existing, entries: [...existing.entries, ...p.entries] }
+          : { type: p.mtype, entries: p.entries }
+        run.loggableMetrics = {
+          ...run.loggableMetrics,
+          [p.lid]: { ...(run.loggableMetrics[p.lid] ?? {}), [p.name]: nextSeries },
+        }
       }
 
       return { runs }

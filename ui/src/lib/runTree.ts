@@ -37,10 +37,9 @@ export function childGroupsOf(groups: TreeData['groups'], path: string): string[
     .sort()
 }
 
-/** A run's label: the user's rename wins, then the run's own name, then the
- *  script's basename. */
-export function runDisplayName(run: RunSummary, customName?: string): string {
-  return customName || run.run_name || (run.script_path.split('/').pop() ?? run.script_path)
+/** A run's label: the run's own name, then the script's basename. */
+export function runDisplayName(run: RunSummary): string {
+  return run.run_name || (run.script_path.split('/').pop() ?? run.script_path)
 }
 
 /** What a search query leaves visible. `null` means "no query" — render all. */

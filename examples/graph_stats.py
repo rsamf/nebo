@@ -2,7 +2,7 @@
 
 Demonstrates how to query the nebo state API after running a pipeline:
 - DAG topology: get_dag_summary(), get_sources(), get_topology_order()
-- Node details: exec_count, logs, metrics, errors, params
+- Node details: exec_count, recent text entries, params
 - Edge listing
 - Serializable graph dict (what MCP tools return)
 - Cycle detection via topological order gaps
@@ -25,7 +25,7 @@ from nebo.core.dag import get_dag_summary, get_sources, get_topology_order
 def load_data(path: str = "data.csv", limit: int = 100) -> list[dict]:
     """Load raw records from a data source."""
     records = [{"id": i, "value": i * 0.5} for i in range(limit)]
-    nb.log(f"Loaded {len(records)} records from {path}")
+    nb.log_text("status", f"Loaded {len(records)} records from {path}")
     time.sleep(0.3)
     return records
 
@@ -36,7 +36,7 @@ def transform(records: list[dict]) -> list[dict]:
     transformed = []
     for r in nb.track(records, name="transforming"):
         transformed.append({**r, "value": r["value"] / 50.0, "tagged": True})
-    nb.log(f"Transformed {len(transformed)} records")
+    nb.log_text("status", f"Transformed {len(transformed)} records")
     nb.log_line("record_count", float(len(transformed)))
     time.sleep(0.3)
     return transformed
@@ -52,7 +52,7 @@ def aggregate(records: list[dict]) -> dict:
         "min": min(values),
         "max": max(values),
     }
-    nb.log(f"Aggregated: mean={stats['mean']:.4f}, count={stats['count']}")
+    nb.log_text("status", f"Aggregated: mean={stats['mean']:.4f}, count={stats['count']}")
     nb.log_line("mean_value", stats["mean"])
     time.sleep(0.3)
     return stats
@@ -107,16 +107,9 @@ def main():
         print(f"\n  {node.func_name}{source_tag}")
         print(f"    exec_count: {node.exec_count}")
         print(f"    docstring:  {doc_preview!r}")
-        print(f"    logs:       {len(node.logs)} entries")
+        print(f"    texts:      {len(node.texts)} entries")
         if node.params:
             print(f"    params:     {node.params}")
-        if node.metrics:
-            for metric_name, history in node.metrics.items():
-                print(f"    metric '{metric_name}': {len(history)} points, latest={history[-1][1]:.4f}")
-        if node.errors:
-            print(f"    errors:     {len(node.errors)}")
-            for err in node.errors:
-                print(f"      [{err['type']}] {err['error']}")
 
     # --- Edges ---
     print(f"\n{'=' * 60}")

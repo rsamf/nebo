@@ -4,8 +4,6 @@ Demonstrates:
 - nb.log_line() for tracking loss, accuracy over steps
 - nb.log_image() for logging generated images
 - @nb.fn() on training functions
-- Metric history accessible via the state API
-- Exception capture and enrichment
 """
 
 import numpy as np
@@ -21,7 +19,7 @@ def create_dataset(num_samples: int = 100, num_features: int = 10) -> dict:
     """Create a synthetic classification dataset with random features and labels."""
     X = np.random.randn(num_samples, num_features).astype(np.float32)
     y = (np.random.rand(num_samples) > 0.5).astype(np.int64)
-    nb.log(f"Created dataset: {num_samples} samples, {num_features} features")
+    nb.log_text("status", f"Created dataset: {num_samples} samples, {num_features} features")
     return {"X": X, "y": y}
 
 
@@ -34,7 +32,7 @@ def create_model(input_dim: int = 10, hidden_dim: int = 32) -> dict:
         "W2": np.random.randn(hidden_dim, 1).astype(np.float32) * 0.01,
         "b2": np.zeros(1, dtype=np.float32),
     }
-    nb.log(f"Created model: {input_dim} → {hidden_dim} → 1")
+    nb.log_text("status", f"Created model: {input_dim} → {hidden_dim} → 1")
     return weights
 
 
@@ -71,7 +69,7 @@ def generate_sample_image(epoch: int) -> np.ndarray:
             img[i, j, 2] = int(((epoch * 25) % 255))              # Blue varies by epoch
     pil_img = Image.fromarray(img)
     nb.log_image(pil_img, name="sample_images", step=epoch)
-    nb.log(f"Logged sample image for epoch {epoch}")
+    nb.log_text("status", f"Logged sample image for epoch {epoch}")
 
 
 @nb.fn()
@@ -105,7 +103,7 @@ def train(dataset: dict, model: dict, epochs: int = 10, batch_size: int = 16) ->
 
         nb.log_line("loss", float(avg_loss), step=epoch)
         nb.log_line("accuracy", float(avg_acc), step=epoch)
-        nb.log(f"Epoch {epoch}: loss={avg_loss:.4f}, accuracy={avg_acc:.4f}")
+        nb.log_text("epochs", f"Epoch {epoch}: loss={avg_loss:.4f}, accuracy={avg_acc:.4f}")
 
         # Log a sample image every 3 epochs
         if epoch % 3 == 0:

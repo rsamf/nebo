@@ -5,8 +5,8 @@ metadata, or audio metadata in process — those flow straight to the
 daemon. Tests that used to inspect ``state.loggables[*].metrics`` /
 ``.images`` / ``.audio`` now attach a ``CapturingClient`` (see
 ``tests/conftest.py``) and assert on the captured wire events. Tests
-that read ``loggable.logs`` still work because the SDK keeps a
-bounded ring of recent text logs for the terminal display.
+that read ``loggable.texts`` still work because the SDK keeps a
+bounded ring of recent text entries for the terminal display.
 """
 
 from __future__ import annotations
@@ -21,12 +21,12 @@ from nebo.core.state import (
 )
 from nebo.core.decorators import fn
 from nebo.logging.logger import (
-    log,
     log_bar,
     log_histogram,
     log_line,
     log_pie,
     log_scatter,
+    log_text,
     md,
 )
 from nebo.core.config import log_cfg
@@ -40,36 +40,52 @@ def _node_by_func_name(name: str) -> NodeInfo:
 
 
 class TestLogging:
-    """Tests for nb.log() and the typed log_* helpers."""
+    """Tests for nb.log_text() and the typed log_* helpers."""
 
     def setup_method(self) -> None:
         SessionState.reset_singleton()
 
-    def test_log_default_name_is_text(self) -> None:
+    def test_log_text_name_is_required(self) -> None:
+        """name is a required non-empty string — there is no default."""
         import nebo as nb
-        from nebo.core.state import get_state
-        nb.log("hello")
-        entry = get_state().loggables["__global__"].logs[-1]
-        assert entry["name"] == "text"
+        with pytest.raises(TypeError):
+            nb.log_text("", "msg")
+        with pytest.raises(TypeError):
+            nb.log_text(None, "msg")  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            nb.log_text("msg")  # type: ignore[call-arg]  # message missing
 
-    def test_log_explicit_name(self) -> None:
+    def test_log_text_name(self) -> None:
         import nebo as nb
         from nebo.core.state import get_state
-        nb.log("hi", name="status")
-        entry = get_state().loggables["__global__"].logs[-1]
+        nb.log_text("status", "hi")
+        entry = get_state().loggables["__global__"].texts[-1]
         assert entry["name"] == "status"
         assert entry["message"] == "hi"
 
-    def test_log_inside_step(self) -> None:
-        """log() inside a step should attach to that node's recent_logs ring."""
+    def test_log_text_emits_text_event_with_step(self, capturing_client) -> None:
+        """log_text sends a {"type": "text"} wire event carrying name + step
+        (and no level field — that concept is alerts-only now)."""
+        import nebo as nb
+        nb.log_text("status", "msg", step=3)
+        (event,) = capturing_client.by_type("text")
+        assert event["type"] == "text"
+        assert event["name"] == "status"
+        assert event["message"] == "msg"
+        assert event["step"] == 3
+        assert event["loggable_id"] == "__global__"
+        assert "level" not in event
+
+    def test_log_text_inside_step(self) -> None:
+        """log_text() inside a step should attach to that node's recent texts ring."""
         @fn()
         def my_step():
-            log("hello world")
+            log_text("text", "hello world")
 
         my_step()
         node = _node_by_func_name("my_step")
-        assert len(node.logs) == 1
-        assert list(node.logs)[0]["message"] == "hello world"
+        assert len(node.texts) == 1
+        assert list(node.texts)[0]["message"] == "hello world"
 
     def test_log_line_inside_step_emits_wire_events(self, capturing_client) -> None:
         """log_line() should send one metric event per call and lock the cursor type."""
@@ -107,12 +123,12 @@ class TestLogging:
         assert tpl is not None and "Part 1" in tpl and "Part 2" in tpl
 
     def test_md_inside_live_run_sets_workflow_description(self) -> None:
-        log("materialize")  # first real event opens the run
+        log_text("text", "materialize")  # first real event opens the run
         md("This is a test workflow")
         assert get_state().workflow_description == "This is a test workflow"
 
     def test_md_inside_live_run_appends(self) -> None:
-        log("materialize")
+        log_text("text", "materialize")
         md("Part 1")
         md("Part 2")
         wd = get_state().workflow_description
@@ -120,7 +136,7 @@ class TestLogging:
 
 
 class TestLogNumpy:
-    """Tests for log() with numpy arrays — read off the recent_logs deque."""
+    """Tests for log_text() with numpy arrays — read off the recent texts deque."""
 
     def setup_method(self) -> None:
         SessionState.reset_singleton()
@@ -134,11 +150,11 @@ class TestLogNumpy:
         @fn()
         def check_array():
             arr = np.zeros((3, 224, 224), dtype=np.float32)
-            log(arr)
+            log_text("text", arr)
 
         check_array()
         node = _node_by_func_name("check_array")
-        msg = list(node.logs)[0]["message"]
+        msg = list(node.texts)[0]["message"]
         assert "ndarray" in msg
         assert "(3, 224, 224)" in msg
         assert "float32" in msg
@@ -147,11 +163,11 @@ class TestLogNumpy:
     def test_log_numpy_preserves_string(self) -> None:
         @fn()
         def my_step():
-            log("plain text message")
+            log_text("text", "plain text message")
 
         my_step()
         node = _node_by_func_name("my_step")
-        assert list(node.logs)[0]["message"] == "plain text message"
+        assert list(node.texts)[0]["message"] == "plain text message"
 
 
 class TestLogCfg:
@@ -279,13 +295,13 @@ class TestImageSerializer:
         assert audio["data"].encode()[:4] == b"RIFF"
 
 
-def test_log_outside_fn_routes_to_global():
+def test_log_text_outside_fn_routes_to_global():
     import nebo as nb
     nb.get_state().reset()
-    nb.log("hello from top-level")
+    nb.log_text("text", "hello from top-level")
     g = nb.get_state().loggables["__global__"]
-    assert len(g.logs) == 1
-    entry = list(g.logs)[0]
+    assert len(g.texts) == 1
+    entry = list(g.texts)[0]
     assert entry["message"] == "hello from top-level"
     assert entry["loggable_id"] == "__global__"
 
@@ -301,24 +317,24 @@ def test_log_line_outside_fn_routes_to_global(capturing_client):
     assert cursor.type == "line"
 
 
-def test_log_inside_fn_still_routes_to_node():
+def test_log_text_inside_fn_still_routes_to_node():
     import nebo as nb
     nb.get_state().reset()
 
     @nb.fn()
     def inner():
-        nb.log("from inner")
+        nb.log_text("text", "from inner")
         return 1
 
     inner()
     state = nb.get_state()
     assert "__global__" in state.loggables
-    assert len(state.loggables["__global__"].logs) == 0
+    assert len(state.loggables["__global__"].texts) == 0
     inner_loggable = next(
         lg for lg in state.loggables.values()
         if getattr(lg, "func_name", None) == "inner"
     )
-    assert len(inner_loggable.logs) == 1
+    assert len(inner_loggable.texts) == 1
 
 
 def test_log_image_accepts_labels_and_emits_them(capturing_client):
@@ -659,9 +675,9 @@ def test_log_line_auto_step_advances_past_explicit_step(capturing_client):
 
 
 def test_high_volume_emissions_dont_grow_sdk_state(capturing_client):
-    """The whole point of the v3 SDK redesign: 1k metric/log/image
+    """The whole point of the v3 SDK redesign: 1k metric/text/image
     emissions must not grow loggable.metrics/.images/.audio (which
-    were dropped) and the recent-logs ring stays bounded."""
+    were dropped) and the recent-texts ring stays bounded."""
     import nebo as nb
     import numpy as np
 
@@ -669,7 +685,7 @@ def test_high_volume_emissions_dont_grow_sdk_state(capturing_client):
     def emit():
         for i in range(1000):
             nb.log_line("v", float(i))
-            nb.log(f"step {i}")
+            nb.log_text("text", f"step {i}")
             nb.log_image(np.zeros((4, 4, 3), dtype=np.uint8), name="img")
 
     emit()
@@ -678,11 +694,52 @@ def test_high_volume_emissions_dont_grow_sdk_state(capturing_client):
     assert not hasattr(node, "metrics")
     assert not hasattr(node, "images")
     assert not hasattr(node, "audio")
-    # Logs are bounded; the deque's maxlen is the cap regardless of N.
-    from nebo.core.state import RECENT_LOGS_MAXLEN
-    assert len(node.logs) == RECENT_LOGS_MAXLEN
+    # Texts are bounded; the deque's maxlen is the cap regardless of N.
+    from nebo.core.state import RECENT_TEXTS_MAXLEN
+    assert len(node.texts) == RECENT_TEXTS_MAXLEN
     # The wire received every event.
     assert len(capturing_client.metrics_named("v")) == 1000
     assert len(capturing_client.by_type("image")) == 1000
     # Type-lock cursor still tracks the metric we emitted.
     assert get_state()._metric_cursors[node.loggable_id]["v"].next_step == 1000
+
+
+class TestLogDeprecatedShim:
+    """nb.log() temporarily forwards to nb.log_text() with a one-time warning.
+
+    Nebo ships no other backwards-compat shims; this one exists so
+    pre-rename pipelines keep running and is slated for removal.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _fresh_warning_gate(self, monkeypatch):
+        import nebo.logging.logger as logger_mod
+        monkeypatch.setattr(logger_mod, "_log_deprecation_warned", False)
+
+    def test_forwards_old_argument_order(self) -> None:
+        import nebo as nb
+        from nebo.core.state import get_state
+        with pytest.warns(FutureWarning, match="nb.log_text"):
+            nb.log("plain message")
+        entry = get_state().loggables["__global__"].texts[-1]
+        assert entry["type"] == "text"
+        assert entry["name"] == "text"  # old default stream name
+        assert entry["message"] == "plain message"
+
+    def test_forwards_name_and_step(self, capturing_client) -> None:
+        import nebo as nb
+        with pytest.warns(FutureWarning):
+            nb.log("msg", name="status", step=7)
+        (event,) = capturing_client.by_type("text")
+        assert event["name"] == "status"
+        assert event["message"] == "msg"
+        assert event["step"] == 7
+
+    def test_warns_exactly_once_per_process(self) -> None:
+        import warnings as warnings_mod
+        import nebo as nb
+        with pytest.warns(FutureWarning):
+            nb.log("first")
+        with warnings_mod.catch_warnings():
+            warnings_mod.simplefilter("error")  # a second warning would raise
+            nb.log("second")

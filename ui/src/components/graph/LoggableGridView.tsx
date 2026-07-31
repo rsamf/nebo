@@ -1,4 +1,5 @@
-import { memo, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
+import { motion } from 'motion/react'
 import { useStore, type ImageEntry, type AudioEntry } from '@/store'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
@@ -6,13 +7,14 @@ import { Search } from 'lucide-react'
 import { MetricBlock } from '@/components/node-tabs/NodeMetrics'
 import { VirtualizedImageList } from '@/components/node-tabs/NodeImages'
 import { AudioItem } from '@/components/node-tabs/NodeAudio'
-import { NodeLogs } from '@/components/node-tabs/NodeLogs'
+import { TextBlock } from '@/components/node-tabs/NodeText'
 import { topologicalSort } from '@/lib/graph'
 import { DEFAULT_RUN_COLOR } from '@/lib/colors'
 import { useTimelineFilter } from '@/hooks/useTimelineFilter'
 import { useContextMenu } from '@/hooks/useContextMenu'
 import { GridCardContextMenu, type GridCardKind } from './GridCardContextMenu'
-import type { LoggableMetricSeries } from '@/lib/api'
+import { NAV_MODALITY_ORDER, type NavModality } from '@/lib/navTarget'
+import type { LoggableMetricSeries, TextEntry } from '@/lib/api'
 
 interface LoggableGridViewProps {
   runId: string
@@ -82,8 +84,13 @@ function GridCardWrapper({ runId, card }: { runId: string; card: CardSpec }) {
 
 // ─── Per-loggable card bodies (used by both Global and per-function rows) ────
 
-function LogsCardBody({ runId, loggableId }: { runId: string; loggableId: string }) {
-  return <NodeLogs runId={runId} loggableId={loggableId} />
+function TextCardBody({ runId, loggableId, name, entries }: {
+  runId: string
+  loggableId: string
+  name: string
+  entries: TextEntry[]
+}) {
+  return <TextBlock name={name} entries={entries} runId={runId} loggableId={loggableId} fill />
 }
 
 // "No entries in current range" shown when the timeline tracker excludes
@@ -159,7 +166,7 @@ function AudioCardBody({ runId, entries }: { runId: string; entries: AudioEntry[
 
 // ─── Tab + section model ────────────────────────────────────────────────────
 
-type TabKey = 'logs' | 'metrics' | 'images' | 'audio'
+type TabKey = 'text' | 'metrics' | 'images' | 'audio'
 
 interface CardSpec {
   cardId: string                       // unique per (section, tab, name)
@@ -169,7 +176,7 @@ interface CardSpec {
   // to build the matching iframe URL.
   kind: GridCardKind
   loggableId: string
-  // Only set for metric / image / audio cards. Ignored for logs.
+  // The stream/metric/media name this card shows.
   name?: string
 }
 
@@ -187,10 +194,51 @@ interface SectionSpec {
 const EMPTY_METRICS: Record<string, LoggableMetricSeries> = {}
 const EMPTY_IMAGES: ImageEntry[] = []
 const EMPTY_AUDIO: AudioEntry[] = []
-const EMPTY_LOGS: import('@/lib/api').LogEntry[] = []
+const EMPTY_TEXTS: TextEntry[] = []
 const EMPTY_LOGGABLE_IMAGES: Record<string, ImageEntry[]> = {}
 const EMPTY_LOGGABLE_AUDIO: Record<string, AudioEntry[]> = {}
 const EMPTY_LOGGABLE_METRICS: Record<string, Record<string, LoggableMetricSeries>> = {}
+
+// How long a deep-linked card stays flashed.
+const HIGHLIGHT_MS = 3000
+
+// Tab priority when a link names a loggable but no stream. Derived from
+// the shared modality order so desktop and mobile resolve links the same.
+const MODALITY_TO_TAB: Record<NavModality, TabKey> = {
+  text: 'text', metric: 'metrics', image: 'images', audio: 'audio',
+}
+const TAB_ORDER: TabKey[] = NAV_MODALITY_ORDER.map(m => MODALITY_TO_TAB[m])
+
+/**
+ * Find the card a `nebo://` target addresses, and the tab that owns it.
+ *
+ * An exact `name` match wins wherever it lives (a stream name is unique
+ * per loggable across modalities in practice, but text/metric/media are
+ * separate namespaces — searching in TAB_ORDER makes ties deterministic).
+ * A loggable-only link falls back to that loggable's first card.
+ */
+function resolveNavTarget(
+  tabs: Record<TabKey, SectionSpec[]>,
+  target: { loggableId: string; name: string | null },
+): { tab: TabKey; cardId: string } | null {
+  if (target.name) {
+    for (const tab of TAB_ORDER) {
+      for (const section of tabs[tab]) {
+        if (section.sectionId !== target.loggableId) continue
+        const card = section.cards.find(c => c.name === target.name)
+        if (card) return { tab, cardId: card.cardId }
+      }
+    }
+  }
+  for (const tab of TAB_ORDER) {
+    for (const section of tabs[tab]) {
+      if (section.sectionId === target.loggableId && section.cards.length > 0) {
+        return { tab, cardId: section.cards[0].cardId }
+      }
+    }
+  }
+  return null
+}
 
 // ─── Main view ───────────────────────────────────────────────────────────────
 
@@ -198,11 +246,11 @@ export function LoggableGridView({ runId }: LoggableGridViewProps) {
   const graph = useStore(s => s.runs.get(runId)?.graph)
 
   // Subscribe to raw slices only; derive groupings via useMemo.
-  const allLogsRaw = useStore(s => s.runs.get(runId)?.logs)
+  const allTextsRaw = useStore(s => s.runs.get(runId)?.texts)
   const allMetricsRaw = useStore(s => s.runs.get(runId)?.loggableMetrics)
   const allImagesRaw = useStore(s => s.runs.get(runId)?.loggableImages)
   const allAudioRaw = useStore(s => s.runs.get(runId)?.loggableAudio)
-  const allLogs = allLogsRaw ?? EMPTY_LOGS
+  const allTexts = allTextsRaw ?? EMPTY_TEXTS
   const allMetrics = allMetricsRaw ?? EMPTY_LOGGABLE_METRICS
   const allImages = allImagesRaw ?? EMPTY_LOGGABLE_IMAGES
   const allAudio = allAudioRaw ?? EMPTY_LOGGABLE_AUDIO
@@ -210,6 +258,10 @@ export function LoggableGridView({ runId }: LoggableGridViewProps) {
   const [activeTab, setActiveTab] = useState<TabKey>('metrics')
   const [activeSectionId, setActiveSectionId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  // Card flashed after a nebo:// deep link lands on it.
+  const [highlightedCardId, setHighlightedCardId] = useState<string | null>(null)
+  const pendingNavTarget = useStore(s => s.pendingNavTarget)
+  const setPendingNavTarget = useStore(s => s.setPendingNavTarget)
 
   // Section list: Global + Agent first, then function nodes in topo order.
   const sectionDescriptors = useMemo(() => {
@@ -229,41 +281,49 @@ export function LoggableGridView({ runId }: LoggableGridViewProps) {
     return sections
   }, [graph])
 
-  // Helper: logs are a flat array on the run, indexed by node — so for
-  // every section we filter once. Could be made a Map for O(N) instead
+  // Helper: text entries are a flat array on the run, indexed by node — so
+  // for every section we filter once. Could be made a Map for O(N) instead
   // of O(N×sections), but section counts stay small in practice.
-  const logsBySection = useMemo(() => {
-    const m = new Map<string, typeof allLogs>()
+  const textsBySection = useMemo(() => {
+    const m = new Map<string, typeof allTexts>()
     for (const s of sectionDescriptors) {
-      m.set(s.sectionId, allLogs.filter(l => l.node === s.sectionId))
+      m.set(s.sectionId, allTexts.filter(t => t.node === s.sectionId))
     }
     return m
-  }, [allLogs, sectionDescriptors])
+  }, [allTexts, sectionDescriptors])
 
   // Build the four tabs' section specs. Each tab decides what counts as
   // a "card" for a given loggable.
   const tabs = useMemo<Record<TabKey, SectionSpec[]>>(() => {
-    const logs: SectionSpec[] = []
+    const text: SectionSpec[] = []
     const metrics: SectionSpec[] = []
     const images: SectionSpec[] = []
     const audio: SectionSpec[] = []
 
     for (const { sectionId, label } of sectionDescriptors) {
-      // Logs — one card per loggable that has any.
-      const logEntries = logsBySection.get(sectionId) ?? []
-      if (logEntries.length > 0) {
-        logs.push({
+      // Text — one card per stream name on this loggable, mirroring how
+      // metrics/images card up per name.
+      const textEntries = textsBySection.get(sectionId) ?? []
+      if (textEntries.length > 0) {
+        const byName = new Map<string, TextEntry[]>()
+        for (const t of textEntries) {
+          const arr = byName.get(t.name) ?? []
+          arr.push(t)
+          byName.set(t.name, arr)
+        }
+        text.push({
           sectionId,
           label,
-          cards: [
-            {
-              cardId: `logs:${sectionId}`,
-              title: `${label} > Logs`,
-              render: () => <LogsCardBody runId={runId} loggableId={sectionId} />,
-              kind: 'logs',
-              loggableId: sectionId,
-            },
-          ],
+          cards: [...byName.entries()].map(([name, entries]) => ({
+            cardId: `text:${sectionId}:${name}`,
+            title: `${label} > ${name}`,
+            render: () => (
+              <TextCardBody runId={runId} loggableId={sectionId} name={name} entries={entries} />
+            ),
+            kind: 'text' as const,
+            loggableId: sectionId,
+            name,
+          })),
         })
       }
 
@@ -341,13 +401,13 @@ export function LoggableGridView({ runId }: LoggableGridViewProps) {
       }
     }
 
-    return { logs, metrics, images, audio }
-  }, [runId, sectionDescriptors, logsBySection, allMetrics, allImages, allAudio])
+    return { text, metrics, images, audio }
+  }, [runId, sectionDescriptors, textsBySection, allMetrics, allImages, allAudio])
 
   // Only show tab buttons that have at least one card on this run.
   const visibleTabs = useMemo(() => {
     const order: { key: TabKey; label: string }[] = [
-      { key: 'logs', label: 'Logs' },
+      { key: 'text', label: 'Text' },
       { key: 'metrics', label: 'Metrics' },
       { key: 'images', label: 'Images' },
       { key: 'audio', label: 'Audio' },
@@ -356,10 +416,10 @@ export function LoggableGridView({ runId }: LoggableGridViewProps) {
   }, [tabs])
 
   // Snap activeTab onto a visible tab whenever the current one disappears
-  // (e.g., logs cleared, no more cards in the active tab). Pure derivation —
-  // no useEffect needed because we only render against `effectiveTab`.
+  // (e.g., no more cards in the active tab). Pure derivation — no useEffect
+  // needed because we only render against `effectiveTab`.
   const effectiveTab: TabKey =
-    visibleTabs.find(t => t.key === activeTab)?.key ?? visibleTabs[0]?.key ?? 'logs'
+    visibleTabs.find(t => t.key === activeTab)?.key ?? visibleTabs[0]?.key ?? 'text'
 
   // Section filter: a chip row above the grid narrows the flat card
   // list to one loggable. Dropping a section that no longer carries
@@ -382,6 +442,39 @@ export function LoggableGridView({ runId }: LoggableGridViewProps) {
     }
     return out
   }, [sectionsForTab, activeSectionId, search])
+
+  // Resolve a pending nebo:// target: switch to the tab that owns the
+  // card, drop any filter hiding it, scroll it into view, and flash it.
+  // Runs after every render (no dep array) because the target's data may
+  // still be hydrating when the link is clicked — each store update
+  // re-renders and retries. All state writes happen inside the rAF
+  // callback, never synchronously in the effect body.
+  useEffect(() => {
+    if (!pendingNavTarget) return
+    const raf = requestAnimationFrame(() => {
+      const target = resolveNavTarget(tabs, pendingNavTarget)
+      if (!target) return // not ingested yet — retried on the next render
+      if (search) setSearch('')
+      if (activeSectionId) setActiveSectionId(null)
+      if (effectiveTab !== target.tab) {
+        setActiveTab(target.tab)
+        return // card mounts on the next render; scroll then
+      }
+      const el = document.getElementById(`card-${target.cardId}`)
+      if (!el) return
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setHighlightedCardId(target.cardId)
+      setPendingNavTarget(null)
+    })
+    return () => cancelAnimationFrame(raf)
+  })
+
+  // The flash is a one-shot ~3s cue, then the card goes back to normal.
+  useEffect(() => {
+    if (!highlightedCardId) return
+    const t = setTimeout(() => setHighlightedCardId(null), HIGHLIGHT_MS)
+    return () => clearTimeout(t)
+  }, [highlightedCardId])
 
   if (!graph) {
     return (
@@ -483,19 +576,39 @@ export function LoggableGridView({ runId }: LoggableGridViewProps) {
             <p className="text-sm">{search ? 'No cards match the filter' : 'No cards in this view'}</p>
           </div>
         ) : (
-          // Container-driven wrap: as many ≥320px columns as fit, so
+          // Container-driven wrap: as many ≥380px columns as fit, so
           // resizing the view (window, side panels) reflows the cards.
           // min(...,100%) keeps a lone column from overflowing containers
           // narrower than the card minimum.
-          <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(min(320px,100%),1fr))]">
+          <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(min(380px,100%),1fr))]">
             {(() => {
               const seenLoggables = new Set<string>()
               return flatCards.map(card => {
                 const isFirst = !seenLoggables.has(card.loggableId)
                 if (isFirst) seenLoggables.add(card.loggableId)
+                const highlighted = highlightedCardId === card.cardId
                 return (
+                  // Outer div keeps the per-loggable anchor (the tracker's
+                  // stream selection scrolls to it); the inner motion div
+                  // is the per-card anchor deep links target.
                   <div key={card.cardId} id={isFirst ? `loggable-card-${card.loggableId}` : undefined}>
-                    <GridCardWrapper runId={runId} card={card} />
+                    <motion.div
+                      id={`card-${card.cardId}`}
+                      className="rounded-lg"
+                      animate={highlighted
+                        ? { boxShadow: [
+                            '0 0 0 0px rgba(59,130,246,0)',
+                            '0 0 0 3px rgba(59,130,246,0.85)',
+                            '0 0 0 3px rgba(59,130,246,0.85)',
+                            '0 0 0 0px rgba(59,130,246,0)',
+                          ] }
+                        : { boxShadow: '0 0 0 0px rgba(59,130,246,0)' }}
+                      transition={highlighted
+                        ? { duration: HIGHLIGHT_MS / 1000, times: [0, 0.08, 0.75, 1], ease: 'easeOut' }
+                        : { duration: 0 }}
+                    >
+                      <GridCardWrapper runId={runId} card={card} />
+                    </motion.div>
                   </div>
                 )
               })

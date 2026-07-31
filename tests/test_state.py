@@ -13,11 +13,11 @@ from nebo.core.state import (
 
 def test_loggable_info_has_shared_fields():
     loggable = LoggableInfo(loggable_id="x", kind="node")
-    # `logs` is a bounded ring buffer used by the terminal "Recent
-    # logs" panel; it is the only payload-bearing field the SDK keeps
+    # `texts` is a bounded ring buffer used by the terminal "Recent
+    # texts" panel; it is the only payload-bearing field the SDK keeps
     # on disk-volume buckets after the v3 redesign.
-    assert isinstance(loggable.logs, deque)
-    assert len(loggable.logs) == 0
+    assert isinstance(loggable.texts, deque)
+    assert len(loggable.texts) == 0
     assert loggable.progress is None
     # Metric values, image metadata, and audio metadata are no longer
     # mirrored on the SDK — they go straight to the daemon.
@@ -32,8 +32,8 @@ def test_node_info_inherits_loggable_info():
     assert node.kind == "node"
     assert node.exec_count == 0
     assert node.is_source is True
-    assert isinstance(node.logs, deque)  # inherited
-    assert len(node.logs) == 0
+    assert isinstance(node.texts, deque)  # inherited
+    assert len(node.texts) == 0
 
 
 def test_global_info_has_fixed_kind():
@@ -89,7 +89,7 @@ def test_emit_after_reset_stays_in_file_mode(monkeypatch):
     from nebo.core.client import NetworkTransport
 
     nb.get_state().reset()
-    nb.log("after reset")
+    nb.log_text("text", "after reset")
     state = nb.get_state()
     assert state._mode != "network" or state._pending_mode is not None
     assert not isinstance(state._transport, NetworkTransport)

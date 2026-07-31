@@ -4,7 +4,7 @@ Commands:
     nebo serve   — Start the persistent daemon server
     nebo status  — Show daemon status and recent runs
     nebo stop    — Stop the daemon
-    nebo logs    — View logs from runs
+    nebo text ls — View text entries from runs
     nebo mcp     — Print MCP connection config for Claude Code
     nebo skill   — List or install nebo-shipped agent skills
 
@@ -350,7 +350,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         for r in run_list[-10:]:
             print(f"  {r['id']}: {r.get('script_path', '')} | "
                   f"nodes={r.get('node_count', 0)}, metrics={r.get('metric_series_count', 0)}, "
-                  f"logs={r.get('log_count', 0)}")
+                  f"texts={r.get('text_count', 0)}")
 
 
 def cmd_stop(args: argparse.Namespace) -> None:
@@ -375,12 +375,12 @@ def cmd_stop(args: argparse.Namespace) -> None:
         _remove_pid()
 
 
-def cmd_logs(args: argparse.Namespace) -> None:
-    """View logs from runs."""
+def cmd_text_ls(args: argparse.Namespace) -> None:
+    """View text entries from runs."""
     from nebo import client
 
     try:
-        result = client.get_logs(
+        result = client.get_text(
             loggable_id=args.node,
             run_id=args.run,
             limit=args.limit,
@@ -394,14 +394,17 @@ def cmd_logs(args: argparse.Namespace) -> None:
         print(json.dumps(result))
         return
 
-    logs = result.get("logs", [])
-    if not logs:
-        print("No logs found.")
+    texts = result.get("texts", [])
+    if not texts:
+        print("No text entries found.")
         return
 
-    for entry in logs:
+    for entry in texts:
         node_tag = f"[{entry.get('loggable_id', '?')}]" if entry.get("loggable_id") else ""
-        print(f"  {node_tag} {entry.get('message', '')}")
+        name = entry.get("name") or "text"
+        step = entry.get("step")
+        step_tag = f"@{step}" if step is not None else ""
+        print(f"  {node_tag} {name}{step_tag}: {entry.get('message', '')}")
 
 
 def cmd_mcp(args: argparse.Namespace) -> None:
@@ -891,11 +894,19 @@ def cmd_mcp_stdio(args: argparse.Namespace) -> None:
 
 
 def cmd_text_log(args: argparse.Namespace) -> None:
-    """Write text log entries."""
+    """Write text entries."""
     from nebo import client
     entries = json.loads(args.entries_json)
     result = client.log_text(entries, run_id=args.run, **_conn_kwargs(args))
     print(json.dumps(result) if args.json else result.get("status", "ok"))
+
+
+def cmd_text(args: argparse.Namespace) -> None:
+    """Route `nebo text <action>`: `log` writes entries, `ls` reads them."""
+    if args.text_action == "ls":
+        cmd_text_ls(args)
+    else:
+        cmd_text_log(args)
 
 
 def cmd_images_log(args: argparse.Namespace) -> None:
@@ -1189,14 +1200,6 @@ def main() -> None:
     p_stop = subparsers.add_parser("stop", help="Stop the daemon")
     p_stop.add_argument("--port", type=int, default=7861)
 
-    # logs
-    p_logs = subparsers.add_parser(
-        "logs", parents=[_common_conn_parser()], help="View logs",
-    )
-    p_logs.add_argument("--run", help="Run ID")
-    p_logs.add_argument("--node", help="Filter by node")
-    p_logs.add_argument("--limit", type=int, default=100)
-
     # load
     p_load = subparsers.add_parser(
         "load", parents=[_common_conn_parser()], help="Load a .nebo file into the daemon",
@@ -1398,16 +1401,22 @@ def main() -> None:
     p_mlog.add_argument("--entries-json", required=True, help="JSON list of metric entries")
     p_mlog.add_argument("--run", help="Run id")
 
-    # text / images / audio  (each has a single "log" action for now)
-    def _add_log_subparser(name: str) -> argparse.ArgumentParser:
-        p = subparsers.add_parser(name, help=f"Write {name} entries")
+    # text / images / audio  (each has a "log" write action; text also reads)
+    def _add_log_subparser(name: str):
+        p = subparsers.add_parser(name, help=f"Read/write {name} entries")
         sub = p.add_subparsers(dest=f"{name}_action", required=True)
         plog = sub.add_parser("log", parents=[_common_conn_parser()], help=f"Write {name} entries")
         plog.add_argument("--entries-json", required=True, help="JSON list of entries")
         plog.add_argument("--run", help="Run id")
-        return p
+        return sub
 
-    _add_log_subparser("text")
+    text_sub = _add_log_subparser("text")
+    p_text_ls = text_sub.add_parser(
+        "ls", parents=[_common_conn_parser()], help="View text entries",
+    )
+    p_text_ls.add_argument("--run", help="Run ID")
+    p_text_ls.add_argument("--node", help="Filter by node")
+    p_text_ls.add_argument("--limit", type=int, default=100)
     _add_log_subparser("images")
     _add_log_subparser("audio")
 
@@ -1432,7 +1441,6 @@ def main() -> None:
         "cache": cmd_cache,
         "status": cmd_status,
         "stop": cmd_stop,
-        "logs": cmd_logs,
         "load": cmd_load,
         "mcp": cmd_mcp,
         "mcp-stdio": cmd_mcp_stdio,
@@ -1446,7 +1454,7 @@ def main() -> None:
         "describe": cmd_describe,
         "alerts": cmd_alerts,
         "metrics": cmd_metrics,
-        "text": cmd_text_log,
+        "text": cmd_text,
         "images": cmd_images_log,
         "audio": cmd_audio_log,
     }

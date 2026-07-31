@@ -204,7 +204,13 @@ class DirectoryWatcher:
             tracked = self._tracked.get(path)
             if tracked is None or not tracked.shallow:
                 return
-            new_offset = await self._ingest_from(path, tracked.offset, run_id)
+            # Catch-up ingest of a file's whole history: don't broadcast it
+            # over WS — connected browsers would drown in replayed events
+            # (they hydrate via REST right after ensure_deep anyway). Live
+            # tail growth (_read_appended) still broadcasts.
+            new_offset = await self._ingest_from(
+                path, tracked.offset, run_id, broadcast=False,
+            )
             try:
                 size = path.stat().st_size
             except FileNotFoundError:
@@ -228,6 +234,7 @@ class DirectoryWatcher:
 
     async def _ingest_from(
         self, path: Path, start_offset: int, run_id: Optional[str],
+        broadcast: bool = True,
     ) -> int:
         """Ingest complete entries from ``start_offset`` to EOF, in chunks of
         ``_INGEST_CHUNK``. Returns the resume offset — parked at the first torn
@@ -253,11 +260,13 @@ class DirectoryWatcher:
                 if len(batch) >= _INGEST_CHUNK:
                     await self._state.ingest_events(
                         batch, run_id=run_id, source="watcher",
+                        broadcast=broadcast,
                     )
                     batch = []
             if batch:
                 await self._state.ingest_events(
                     batch, run_id=run_id, source="watcher",
+                    broadcast=broadcast,
                 )
             return f.tell()
 

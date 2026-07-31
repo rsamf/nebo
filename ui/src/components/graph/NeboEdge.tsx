@@ -1,7 +1,5 @@
 import { memo } from 'react'
 import { getBezierPath, type EdgeProps } from '@xyflow/react'
-import { useStore } from '@/store'
-import { isRunLive } from '@/lib/api'
 
 export const NeboEdge = memo(function NeboEdge({
   id,
@@ -11,14 +9,7 @@ export const NeboEdge = memo(function NeboEdge({
   targetY,
   sourcePosition,
   targetPosition,
-  data,
 }: EdgeProps) {
-  const runId = (data as { runId?: string })?.runId
-  const run = runId ? useStore.getState().runs.get(runId) : undefined
-  // "Live" is a recency accent — the run emitted an event recently. There
-  // is no run_completed/ended state to key off.
-  const isRunning = isRunLive(run?.summary)
-
   const [edgePath] = getBezierPath({
     sourceX,
     sourceY,
@@ -29,21 +20,12 @@ export const NeboEdge = memo(function NeboEdge({
   })
 
   return (
-    <>
-      <path
-        id={id}
-        d={edgePath}
-        fill="none"
-        stroke="oklch(0.556 0 0)"
-        strokeWidth={2}
-        strokeDasharray={isRunning ? '6 4' : undefined}
-        className={isRunning ? 'animate-[dash_1s_linear_infinite]' : ''}
-      />
-      <style>{`
-        @keyframes dash {
-          to { stroke-dashoffset: -20; }
-        }
-      `}</style>
-    </>
+    <path
+      id={id}
+      d={edgePath}
+      fill="none"
+      stroke="oklch(0.556 0 0)"
+      strokeWidth={2}
+    />
   )
 })

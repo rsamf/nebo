@@ -1,6 +1,6 @@
 ---
 name: nebo-runs-qa
-description: Use when the user asks questions about nebo runs — logs, metrics, DAG structure, comparisons across runs — or wants you to compute and display a derived metric (line, bar, pie, scatter, histogram) in the nebo web UI. Talks to the daemon via the `nebo` CLI (no MCP configuration required). The daemon must be running (`nebo serve`).
+description: Use when the user asks questions about nebo runs — text, metrics, DAG structure, comparisons across runs — or wants you to compute and display a derived metric (line, bar, pie, scatter, histogram) in the nebo web UI. Talks to the daemon via the `nebo` CLI (no MCP configuration required). The daemon must be running (`nebo serve`).
 ---
 
 # Nebo Q&A and derived metrics (CLI)
@@ -62,7 +62,7 @@ rely on the human-formatted columns.
 | What does the workflow do? | `nebo describe --run <R> --json` |
 | Inspect the DAG | `nebo graph show --run <R> --json` |
 | What did node N do? | `nebo loggables show <N> --run <R> --json` |
-| Get logs for node N | `nebo logs --run <R> --node <N> --json` |
+| Get text entries for node N | `nebo text ls --run <R> --node <N> --json` |
 | List available metrics | `nebo metrics list --run <R> --json` |
 | Read one metric's series | `nebo metrics get <loggable> --name <M> --values-only --run <R> --json` |
 | Read all of a loggable's metrics | `nebo metrics get <loggable> --run <R> --json` |
@@ -76,7 +76,7 @@ rely on the human-formatted columns.
 `nebo runs show --json` keys worth knowing: `run_config` (the dict passed
 to `nb.start_run(config=...)`), `metrics_index` ({loggable: [metric
 names]}), `metric_series_count`, `latest_step`, `node_count`,
-`log_count`, `started_at`, `last_event_at` (epoch seconds of the most
+`text_count`, `started_at`, `last_event_at` (epoch seconds of the most
 recent event — there is no end time; a run is never known to be "done").
 
 ## Organizing runs into groups
@@ -121,21 +121,33 @@ Docs are living documents: update `README.md` when conclusions change, and add
 extra named docs (`ablations.md`, `failures.md`) rather than letting the README
 sprawl. Write it with `nebo groups doc set <path> README.md --file <file>`.
 
-### Linking to runs and steps (`nebo://`)
+### Canonical references (`nebo://`)
 
-Inside a doc, cite specific runs and moments with `nebo://` links — clicking
-them in the UI jumps straight there:
+Every nebo resource has a canonical `nebo://` reference. Use these when citing
+runs, streams, and moments in group docs — clicking them in the UI jumps
+straight there:
+
+```
+nebo://run/<run_id>                          a run
+nebo://run/<run_id>/<loggable_id>            a loggable — qualname, __global__,
+                                             or __agent__ (always ONE path segment)
+nebo://run/<run_id>/<loggable_id>/<name...>  a named stream (name may contain '/')
+<any run form>@<step>                        a datapoint at a step
+                                             (e.g. nebo://run/abc123/train/loss@120)
+nebo://group/<path>                          a group
+```
 
 ```markdown
 The [baseline](nebo://run/a3f8c2d1) plateaued, but
-[lr=3e-4 diverged at step 1200](nebo://run/9b04e7aa?step=1200).
-See the earlier [detr experiments](nebo://group/vision/detr).
+[lr=3e-4 diverged at step 1200](nebo://run/9b04e7aa@1200) — see
+[train/loss there](nebo://run/9b04e7aa/train/loss@1200) and the earlier
+[detr experiments](nebo://group/vision/detr).
 ```
 
-- `nebo://run/<run_id>` — open that run.
-- `nebo://run/<run_id>?step=<int>` — open the run **and** jump to that step
-  (prefer this whenever a claim is about a specific moment in training).
-- `nebo://group/<path>` — open that group's page.
+- Prefer the `@<step>` form whenever a claim is about a specific moment in
+  training. `?step=<n>` on a run ref is still accepted as a legacy alias.
+- To validate a reference before citing it, the daemon's `GET /resolve?ref=<uri>`
+  returns the parsed components plus `exists`.
 
 ### `metrics get` response schema
 
@@ -254,7 +266,7 @@ For one metric across several runs, use the cross-run query directly:
 
 This returns `{"runs": {"R1": [{step, value, ...}, ...], "R2": ...}}` —
 one call instead of a per-run loop. For anything beyond a single metric
-name (different metrics per run, logs, configs), loop:
+name (different metrics per run, text, configs), loop:
 
 1. `nebo runs list --json` — pick the relevant run ids.
 2. For each: `nebo runs show <id> --json` (for `metrics_index` and
@@ -334,7 +346,7 @@ are available without spawning subprocesses. Both transports are parallel
 | `nebo describe` | `nebo_get_description` |
 | `nebo graph show` | `nebo_get_graph` |
 | `nebo loggables show <id>` | `nebo_get_loggable_status` |
-| `nebo logs` | `nebo_get_logs` |
+| `nebo text ls` | `nebo_get_text` |
 | `nebo metrics get` | `nebo_get_metrics` |
 | `nebo metrics log` | `nebo_log_metric` |
 | `nebo alerts ls` | `nebo_list_alerts` |

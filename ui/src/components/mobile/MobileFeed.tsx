@@ -1,7 +1,9 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { motion } from 'motion/react'
 import { useStore } from '@/store'
 import type { AudioEntry, ImageEntry } from '@/store'
-import { api, type LogEntry, type LoggableMetricSeries } from '@/lib/api'
+import { resolveNavModality, type NavModality } from '@/lib/navTarget'
+import { api, type TextEntry, type LoggableMetricSeries } from '@/lib/api'
 import { DEFAULT_RUN_COLOR } from '@/lib/colors'
 import { useTimelineFilter } from '@/hooks/useTimelineFilter'
 import { SingleRunChart } from '@/components/node-tabs/NodeMetrics'
@@ -10,45 +12,85 @@ import { ImageWithLabels } from '@/components/shared/ImageWithLabels'
 import { Modal } from '@/components/ui/modal'
 import { LongPressChartGate } from './LongPressChartGate'
 import { MetricPreview } from './MetricPreview'
-import { Chip, LEVEL_FILTERS, Segmented, type LevelFilter } from './primitives'
+import { Chip, Segmented } from './primitives'
 import { latestMetricLabel, loggableDisplayName } from './util'
-import { cn, formatTimestamp, mediaEntryKey } from '@/lib/utils'
+import { formatTimestamp, mediaEntryKey } from '@/lib/utils'
 
 // Flat feed of everything the run logs: a pipeline-stage chip rail and a
-// type filter on top, then one card per metric / media stream / log tail.
+// type filter on top, then one card per metric / media / text stream.
 // Tapping a metric card expands the full chart inline (with the tracker
 // playhead); charts stay mounted per the useChartJs remount invariant.
 
-type TypeFilter = 'all' | 'metrics' | 'media' | 'logs'
+type TypeFilter = 'all' | 'metrics' | 'media' | 'text'
 
 const TYPE_FILTERS: { value: TypeFilter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'metrics', label: 'Metrics' },
   { value: 'media', label: 'Media' },
-  { value: 'logs', label: 'Logs' },
+  { value: 'text', label: 'Text' },
 ]
+
+// Deep-link landing: the feed's type filter is mobile's equivalent of the
+// desktop tab, and card keys are the scroll anchors.
+const MODALITY_TO_TYPE: Record<NavModality, TypeFilter> = {
+  text: 'text', metric: 'metrics', image: 'media', audio: 'media',
+}
+const MODALITY_TO_PREFIX: Record<NavModality, string> = {
+  text: 't', metric: 'm', image: 'i', audio: 'a',
+}
+const HIGHLIGHT_MS = 3000
+
+/** Scroll anchor + deep-link flash for one feed card. */
+function FeedCardAnchor({ cardId, highlighted, children }: {
+  cardId: string
+  highlighted: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <motion.div
+      id={`mcard-${cardId}`}
+      className="rounded-xl"
+      animate={highlighted
+        ? { boxShadow: [
+            '0 0 0 0px rgba(59,130,246,0)',
+            '0 0 0 3px rgba(59,130,246,0.85)',
+            '0 0 0 3px rgba(59,130,246,0.85)',
+            '0 0 0 0px rgba(59,130,246,0)',
+          ] }
+        : { boxShadow: '0 0 0 0px rgba(59,130,246,0)' }}
+      transition={highlighted
+        ? { duration: HIGHLIGHT_MS / 1000, times: [0, 0.08, 0.75, 1], ease: 'easeOut' }
+        : { duration: 0 }}
+    >
+      {children}
+    </motion.div>
+  )
+}
 
 export function MobileFeed({ runId }: { runId: string }) {
   const run = useStore(s => s.runs.get(runId))
   const runColor = useStore(s => s.runColors.get(runId)) ?? DEFAULT_RUN_COLOR
   const [stage, setStage] = useState<string | null>(null)
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
+  const [highlightedCardId, setHighlightedCardId] = useState<string | null>(null)
+  const pendingNavTarget = useStore(s => s.pendingNavTarget)
+  const setPendingNavTarget = useStore(s => s.setPendingNavTarget)
 
   const globalId = run?.globalLoggable?.loggableId ?? '__global__'
   const agentId = run?.agentLoggable?.loggableId ?? '__agent__'
 
-  // One pass over the (potentially 10k+) log array per change, instead
+  // One pass over the (potentially 10k+) text array per change, instead
   // of each stage row re-filtering the whole thing.
-  const logsByStage = useMemo(() => {
-    const out = new Map<string, LogEntry[]>()
-    for (const l of run?.logs ?? []) {
-      const id = l.node ?? globalId
+  const textsByStage = useMemo(() => {
+    const out = new Map<string, TextEntry[]>()
+    for (const t of run?.texts ?? []) {
+      const id = t.node ?? globalId
       const arr = out.get(id)
-      if (arr) arr.push(l)
-      else out.set(id, [l])
+      if (arr) arr.push(t)
+      else out.set(id, [t])
     }
     return out
-  }, [run?.logs, globalId])
+  }, [run?.texts, globalId])
 
   // Stage rail: every DAG node (registration order), then global/agent
   // when they have content. O(nodes) with map lookups — cheap enough to
@@ -58,10 +100,42 @@ export function MobileFeed({ runId }: { runId: string }) {
     Object.keys(run?.loggableMetrics[id] ?? {}).length > 0 ||
     (run?.loggableImages[id]?.length ?? 0) > 0 ||
     (run?.loggableAudio[id]?.length ?? 0) > 0 ||
-    logsByStage.has(id)
+    textsByStage.has(id)
   for (const extra of [globalId, agentId]) {
     if (!stages.includes(extra) && hasContent(extra)) stages.push(extra)
   }
+
+  // Deep-link landing, mirroring the desktop flat view: switch to the type
+  // filter that owns the card, drop a stage chip that would hide it,
+  // scroll to it, flash it. Runs after every render (no dep array) since
+  // the target's data may still be hydrating; all state writes happen in
+  // the rAF callback, never synchronously in the effect body.
+  useEffect(() => {
+    if (!pendingNavTarget || !run) return
+    const raf = requestAnimationFrame(() => {
+      const hit = resolveNavModality(run, pendingNavTarget.loggableId, pendingNavTarget.name)
+      if (!hit) return // not ingested yet — retried on the next render
+      if (stage && stage !== pendingNavTarget.loggableId) setStage(null)
+      const wantType = MODALITY_TO_TYPE[hit.modality]
+      if (typeFilter !== wantType) {
+        setTypeFilter(wantType)
+        return // card mounts on the next render; scroll then
+      }
+      const cardId = `${MODALITY_TO_PREFIX[hit.modality]}:${pendingNavTarget.loggableId}:${hit.name}`
+      const el = document.getElementById(`mcard-${cardId}`)
+      if (!el) return
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setHighlightedCardId(cardId)
+      setPendingNavTarget(null)
+    })
+    return () => cancelAnimationFrame(raf)
+  })
+
+  useEffect(() => {
+    if (!highlightedCardId) return
+    const t = setTimeout(() => setHighlightedCardId(null), HIGHLIGHT_MS)
+    return () => clearTimeout(t)
+  }, [highlightedCardId])
 
   if (!run) return null
 
@@ -99,9 +173,10 @@ export function MobileFeed({ runId }: { runId: string }) {
             runId={runId}
             loggableId={id}
             nodeLabel={loggableDisplayName(run, id)}
-            logs={logsByStage.get(id)}
+            texts={textsByStage.get(id)}
             typeFilter={typeFilter}
             color={runColor}
+            highlightedCardId={highlightedCardId}
           />
         ))}
         {visibleStages.length === 0 && (
@@ -118,16 +193,18 @@ function StageRows({
   runId,
   loggableId,
   nodeLabel,
-  logs,
+  texts,
   typeFilter,
   color,
+  highlightedCardId,
 }: {
   runId: string
   loggableId: string
   nodeLabel: string
-  logs: LogEntry[] | undefined
+  texts: TextEntry[] | undefined
   typeFilter: TypeFilter
   color: string
+  highlightedCardId: string | null
 }) {
   const run = useStore(s => s.runs.get(runId))
   const metrics = run?.loggableMetrics[loggableId] ?? {}
@@ -136,45 +213,44 @@ function StageRows({
 
   const imagesByName = useMemo(() => groupByName(images ?? []), [images])
   const audioByName = useMemo(() => groupByName(audio ?? []), [audio])
+  const textsByName = useMemo(() => groupByName(texts ?? []), [texts])
+
+  const anchor = (cardId: string, node: React.ReactNode) => (
+    <FeedCardAnchor key={cardId} cardId={cardId} highlighted={highlightedCardId === cardId}>
+      {node}
+    </FeedCardAnchor>
+  )
 
   return (
     <>
       {(typeFilter === 'all' || typeFilter === 'metrics') &&
-        Object.entries(metrics).map(([name, series]) => (
-          <MetricFeedCard
-            key={`m:${loggableId}:${name}`}
-            name={name}
-            series={series}
-            nodeLabel={nodeLabel}
-            color={color}
-          />
+        Object.entries(metrics).map(([name, series]) => anchor(
+          `m:${loggableId}:${name}`,
+          <MetricFeedCard name={name} series={series} nodeLabel={nodeLabel} color={color} />,
         ))}
       {(typeFilter === 'all' || typeFilter === 'media') && (
         <>
-          {[...imagesByName.entries()].map(([name, entries]) => (
+          {[...imagesByName.entries()].map(([name, entries]) => anchor(
+            `i:${loggableId}:${name}`,
             <ImageFeedCard
-              key={`i:${loggableId}:${name}`}
               runId={runId}
               loggableId={loggableId}
               name={name}
               entries={entries}
               nodeLabel={nodeLabel}
-            />
+            />,
           ))}
-          {[...audioByName.entries()].map(([name, entries]) => (
-            <AudioFeedCard
-              key={`a:${loggableId}:${name}`}
-              runId={runId}
-              name={name}
-              entries={entries}
-              nodeLabel={nodeLabel}
-            />
+          {[...audioByName.entries()].map(([name, entries]) => anchor(
+            `a:${loggableId}:${name}`,
+            <AudioFeedCard runId={runId} name={name} entries={entries} nodeLabel={nodeLabel} />,
           ))}
         </>
       )}
-      {(typeFilter === 'all' || typeFilter === 'logs') && logs && logs.length > 0 && (
-        <LogsFeedCard key={`l:${loggableId}`} logs={logs} nodeLabel={nodeLabel} />
-      )}
+      {(typeFilter === 'all' || typeFilter === 'text') &&
+        [...textsByName.entries()].map(([name, entries]) => anchor(
+          `t:${loggableId}:${name}`,
+          <TextFeedCard name={name} entries={entries} nodeLabel={nodeLabel} />,
+        ))}
     </>
   )
 }
@@ -375,47 +451,31 @@ function AudioFeedCard({
   )
 }
 
-function LogsFeedCard({ logs, nodeLabel }: { logs: LogEntry[]; nodeLabel: string }) {
-  const [level, setLevel] = useState<LevelFilter>('All')
+function TextFeedCard({ name, entries, nodeLabel }: { name: string; entries: TextEntry[]; nodeLabel: string }) {
   const timelineFilter = useTimelineFilter()
 
   const visible = useMemo(() => {
-    let filtered = logs
-    if (level !== 'All') {
-      const want = level.toLowerCase()
-      // "warn" chip matches the SDK's "warning" level string too.
-      filtered = filtered.filter(l => l.level === want || (want === 'warn' && l.level === 'warning'))
-    }
-    if (timelineFilter) filtered = filtered.filter(e => timelineFilter.matchEntry(e))
+    const filtered = timelineFilter ? entries.filter(e => timelineFilter.matchEntry(e)) : entries
     return filtered.slice(-100)
-  }, [logs, level, timelineFilter])
+  }, [entries, timelineFilter])
 
   return (
     <div className="rounded-xl border border-border bg-card px-3.5 py-3">
       <div className="mb-2 flex items-baseline gap-2">
-        <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">Logs</span>
+        <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{name}</span>
         <span className="shrink-0 text-[11px] text-muted-foreground">{nodeLabel} · tail</span>
-      </div>
-      <div className="mb-2 flex gap-1.5">
-        {LEVEL_FILTERS.map(lvl => (
-          <Chip key={lvl} label={lvl} active={level === lvl} onTap={() => setLevel(lvl)} />
-        ))}
       </div>
       <div className="no-scrollbar max-h-40 overflow-y-auto font-mono">
         {visible.length === 0 && (
-          <div className="py-1 text-[11px] text-muted-foreground">No matching log lines</div>
+          <div className="py-1 text-[11px] text-muted-foreground">No entries in current range</div>
         )}
-        {visible.map((l, i) => (
-          <div
-            key={i}
-            className={cn(
-              'rounded px-1.5 py-0.5 text-[11px] leading-[1.45]',
-              (l.level === 'error') && 'bg-red-500/10 text-red-400',
-              (l.level === 'warning' || l.level === 'warn') && 'text-yellow-500',
-            )}
-          >
-            <span className="mr-1.5 text-muted-foreground">{formatTimestamp(l.timestamp)}</span>
-            {l.message}
+        {visible.map((t, i) => (
+          <div key={i} className="rounded px-1.5 py-0.5 text-[11px] leading-[1.45]">
+            <span className="mr-1.5 text-muted-foreground">
+              {formatTimestamp(t.timestamp)}
+              {t.step != null ? ` · step ${t.step}` : ''}
+            </span>
+            {t.message}
           </div>
         ))}
       </div>

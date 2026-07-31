@@ -97,7 +97,7 @@ def scatter_demo() -> None:
     becomes its own series on the same chart, distinguished by shape,
     and toggleable via the UI chip row. Repeated calls accumulate
     points on the same plot, with ``step`` auto-incrementing per
-    emission so each point can be correlated to logs/images at the
+    emission so each point can be correlated to text/images at the
     same step (clicking a point in the UI filters the rest of the
     panels accordingly).
     """

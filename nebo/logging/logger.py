@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging as _stdlib_logging
 import time
+import warnings
 from typing import Any, Optional, Union
 
 from nebo.core.state import MetricCursor, _current_node, get_state
@@ -11,7 +12,7 @@ from nebo.core.state import MetricCursor, _current_node, get_state
 
 GLOBAL_LOGGABLE_ID = "__global__"
 
-# Surface for nb.log() text messages. nb.init() always attaches a
+# Surface for nb.log_text() messages. nb.init() always attaches a
 # stdout StreamHandler via _install_text_logger() so text logs are visible.
 _text_logger = _stdlib_logging.getLogger("nebo")
 
@@ -89,20 +90,52 @@ def _format_tensor(obj: Any) -> str:
     return "\n".join(parts)
 
 
+# One-time deprecation gate for the nb.log() shim below.
+_log_deprecation_warned = False
+
+
 def log(message: Union[str, Any], *, name: Optional[str] = None, step: Optional[int] = None) -> None:
-    """Log a message to the current node.
+    """Deprecated alias for :func:`log_text` (kept for pre-rename pipelines).
+
+    Accepts the old argument order — ``nb.log(message, name=..., step=...)``
+    with ``name`` defaulting to ``"text"`` — and forwards to
+    ``log_text(name, message, step=step)``. Warns once per process; nebo
+    otherwise ships no backwards-compat shims, and this one will be removed
+    in a later release.
+    """
+    global _log_deprecation_warned
+    if not _log_deprecation_warned:
+        _log_deprecation_warned = True
+        warnings.warn(
+            "nb.log() is deprecated and will be removed in a later release; "
+            "use nb.log_text(name, message, step=...) instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
+    log_text(name or "text", message, step=step)
+
+
+def log_text(name: str, message: Union[str, Any], *, step: Optional[int] = None) -> None:
+    """Log a named text entry to the current node.
+
+    Text is a named stream of payload/data messages, just like the metric
+    and media helpers: ``log_text`` pairs a stream ``name`` with a
+    ``message`` the way ``log_line`` pairs a name with a value.
 
     Accepts plain strings as well as tensor-like objects (numpy
     ndarray, torch Tensor).  Tensor-like objects are automatically
     formatted with shape, dtype, and basic statistics so they
-    display nicely in the UI log tab.
+    display nicely in the UI text tab.
 
     Args:
+        name: Stream name for this entry, e.g. "status" or "rollout/summary".
         message: The message string, or a tensor/ndarray to format.
-        name: Stream name for this log; defaults to "text".
         step: Optional step counter.
     """
     _ensure_initialized()
+
+    if not isinstance(name, str) or not name:
+        raise TypeError("log_text() name must be a non-empty string")
 
     if _is_tensor_like(message):
         message = _format_tensor(message)
@@ -113,12 +146,11 @@ def log(message: Union[str, Any], *, name: Optional[str] = None, step: Optional[
     state = get_state()
     node_id = _current_node.get() or GLOBAL_LOGGABLE_ID
     timestamp = time.time()
-    name = name if name else "text"
 
     state.ensure_loggable(node_id)
 
     entry = {
-        "type": "log",
+        "type": "text",
         "loggable_id": node_id,
         "name": name,
         "message": message,
@@ -126,7 +158,7 @@ def log(message: Union[str, Any], *, name: Optional[str] = None, step: Optional[
         "timestamp": timestamp,
     }
 
-    state.loggables[node_id].logs.append(entry)
+    state.loggables[node_id].texts.append(entry)
 
     state._send_to_client(entry)
 

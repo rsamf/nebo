@@ -129,13 +129,13 @@ def get_loggable_status(loggable_id: str, run_id: Optional[str] = None, **conn) 
     return _get(path, **conn)
 
 
-def get_logs(
+def get_text(
     loggable_id: Optional[str] = None,
     run_id: Optional[str] = None,
     limit: Optional[int] = None,
     **conn,
 ) -> Any:
-    path = f"{_run_scope(run_id)}/logs" if run_id else "/logs"
+    path = f"{_run_scope(run_id)}/text" if run_id else "/text"
     qs: list[str] = []
     if loggable_id:
         qs.append(f"loggable_id={urllib.parse.quote(loggable_id)}")
@@ -428,21 +428,20 @@ def log_text(
     run_id: Optional[str] = None,
     **conn,
 ) -> Any:
-    """Push text log entries to the daemon.
+    """Push text entries to the daemon.
 
-    Each entry: ``{loggable_id?, message, name?, level?, step?}``. Level defaults
-    to ``info``; `loggable_id` defaults to ``__agent__``.
+    Each entry: ``{loggable_id?, name?, message, step?}``. ``loggable_id``
+    defaults to ``__agent__``; ``name`` defaults to ``text``.
     """
     events: list[dict[str, Any]] = []
     for e in entries:
         lid = e.get("loggable_id") or "__agent__"
         events.append(_ensure_loggable_event(lid))
         events.append({
-            "type": "log",
+            "type": "text",
             "loggable_id": lid,
             "name": e.get("name") or "text",
             "message": e.get("message", ""),
-            "level": e.get("level", "info"),
             "step": e.get("step"),
             "timestamp": time.time(),
         })

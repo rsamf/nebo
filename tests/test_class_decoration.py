@@ -23,10 +23,10 @@ def test_class_decoration_wraps_methods(reset_state):
     @nb.fn()
     class MyProcessor:
         def process(self):
-            nb.log("processing")
+            nb.log_text("text", "processing")
 
         def finalize(self):
-            nb.log("finalizing")
+            nb.log_text("text", "finalizing")
 
     p = MyProcessor()
     p.process()
@@ -47,7 +47,7 @@ def test_class_group_field(reset_state):
     @nb.fn()
     class MyAgent:
         def think(self):
-            nb.log("thinking")
+            nb.log_text("text", "thinking")
 
     agent = MyAgent()
     agent.think()
@@ -61,7 +61,7 @@ def test_class_methods_materialize_on_execution(reset_state):
     """All executed methods of a decorated class materialize, even silent ones.
 
     Silent methods still need to appear in the graph so dependency chains
-    aren't broken when a caller method doesn't itself call nb.log.
+    aren't broken when a caller method doesn't itself call nb.log_text.
     """
     import nebo as nb
     from nebo.core.state import get_state
@@ -69,7 +69,7 @@ def test_class_methods_materialize_on_execution(reset_state):
     @nb.fn()
     class MyClass:
         def logs(self):
-            nb.log("visible")
+            nb.log_text("text", "visible")
 
         def silent(self):
             return 42
@@ -94,7 +94,7 @@ def test_redundant_decorator_warning(reset_state):
         class MyClass:
             @nb.fn()
             def my_method(self):
-                nb.log("hello")
+                nb.log_text("text", "hello")
 
         assert len(w) == 1
         assert "redundant" in str(w[0].message).lower()
@@ -108,7 +108,7 @@ def test_decorated_method_in_undecorated_class(reset_state):
     class MyClass:
         @nb.fn()
         def my_method(self):
-            nb.log("standalone")
+            nb.log_text("text", "standalone")
 
     obj = MyClass()
     obj.my_method()
@@ -127,12 +127,12 @@ def test_called_fn_inside_class_group(reset_state):
 
     @nb.fn()
     def helper():
-        nb.log("helping")
+        nb.log_text("text", "helping")
 
     @nb.fn()
     class MyClass:
         def run(self):
-            nb.log("running")
+            nb.log_text("text", "running")
             helper()
 
     obj = MyClass()
@@ -152,10 +152,10 @@ def test_dunder_methods_are_wrapped(reset_state):
     @nb.fn()
     class MyCallable:
         def __init__(self):
-            nb.log("initializing")
+            nb.log_text("text", "initializing")
 
         def __call__(self, x):
-            nb.log(f"called with {x}")
+            nb.log_text("text", f"called with {x}")
             return x * 2
 
     obj = MyCallable()

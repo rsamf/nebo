@@ -21,9 +21,6 @@ import { NeboNode } from './NeboNode'
 import { GroupNode } from './GroupNode'
 import { NeboEdge } from './NeboEdge'
 import { GraphToolbar } from './GraphToolbar'
-import { DescriptionOverlay } from './DescriptionOverlay'
-import { useContextMenu } from '@/hooks/useContextMenu'
-import { GraphContextMenu } from './GraphContextMenu'
 
 interface DagGraphProps {
   runId: string
@@ -157,6 +154,9 @@ function DagGraphInner({ runId }: DagGraphProps) {
   const [edges, setEdges, onEdgesChange] = useEdgesState([] as Edge[])
 
   const initialLayoutDone = useRef(false)
+  // fitView is a one-shot per run: re-fitting on every structural change
+  // would yank the viewport while a live run streams new nodes in.
+  const fittedRunRef = useRef<string | null>(null)
   const edgesRef = useRef<Edge[]>([])
 
   // Keep a ref to graph so the memo can read latest data without depending on the object ref
@@ -221,7 +221,12 @@ function DagGraphInner({ runId }: DagGraphProps) {
     initialLayoutDone.current = false
   }, [baseNodes, baseEdges, setNodes, setEdges, dagDirection])
 
-  // After initial measurement, re-layout with real dimensions
+  // After initial measurement, re-layout with real dimensions. Depends on
+  // `nodes` (identity), not `nodes.length`: measurement updates and
+  // same-count structural swaps change identity but not length, and this
+  // effect must keep retrying until every node has reported real
+  // dimensions — otherwise the graph is stuck on the default-size layout
+  // with no fit (the old `?run=` deep-link bug).
   useEffect(() => {
     if (!nodesInitialized || initialLayoutDone.current || nodes.length === 0) return
 
@@ -235,9 +240,12 @@ function DagGraphInner({ runId }: DagGraphProps) {
       const g = graphRef.current
       const groups = g ? computeGroupNodes(laid, g.nodes, dims) : []
       setNodes([...groups, ...laid])
-      requestAnimationFrame(() => fitView({ duration: 200 }))
+      if (fittedRunRef.current !== runId) {
+        fittedRunRef.current = runId
+        requestAnimationFrame(() => fitView({ duration: 200 }))
+      }
     }
-  }, [nodesInitialized, nodes.length, getNodes, setNodes, fitView, dagDirection])
+  }, [nodesInitialized, nodes, getNodes, setNodes, fitView, dagDirection, runId])
 
   // Relayout only when explicitly triggered (expand/collapse/reset), not on content growth
   const layoutTrigger = useStore(s => s.layoutTrigger)
@@ -276,7 +284,6 @@ function DagGraphInner({ runId }: DagGraphProps) {
 
   const resizingNodeId = useStore(s => s.resizingNodeId)
   const toggleNodeResize = useStore(s => s.toggleNodeResize)
-  const contextMenu = useContextMenu()
 
   // Escape key clears resizing state
   useEffect(() => {
@@ -294,11 +301,6 @@ function DagGraphInner({ runId }: DagGraphProps) {
       toggleNodeResize(resizingNodeId)
     }
   }, [resizingNodeId, toggleNodeResize])
-
-  const onPaneContextMenu = useCallback((event: MouseEvent | React.MouseEvent) => {
-    event.preventDefault()
-    contextMenu.open(event as React.MouseEvent)
-  }, [contextMenu])
 
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null)
 
@@ -330,7 +332,6 @@ function DagGraphInner({ runId }: DagGraphProps) {
           onNodeDragStart={onNodeDragStart}
           onNodeDragStop={onNodeDragStop}
           onPaneClick={onPaneClick}
-          onPaneContextMenu={onPaneContextMenu}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           fitView
@@ -349,8 +350,6 @@ function DagGraphInner({ runId }: DagGraphProps) {
           )}
           <GraphToolbar onResetLayout={onResetLayout} runId={runId} />
         </ReactFlow>
-        <DescriptionOverlay runId={runId} />
-        <GraphContextMenu isOpen={contextMenu.isOpen} position={contextMenu.position} onClose={contextMenu.close} />
       </div>
     </DragContext.Provider>
   )

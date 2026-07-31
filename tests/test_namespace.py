@@ -15,7 +15,7 @@ class TestNamespaceImports:
         """import nebo should work."""
         import nebo
         assert hasattr(nebo, "fn")
-        assert hasattr(nebo, "log")
+        assert hasattr(nebo, "log_text")
         assert hasattr(nebo, "log_line")
         assert hasattr(nebo, "log_bar")
         assert hasattr(nebo, "log_pie")
@@ -24,12 +24,15 @@ class TestNamespaceImports:
         assert hasattr(nebo, "init")
         # log_metric was split into the typed log_* functions above
         assert not hasattr(nebo, "log_metric")
+        # nb.log was renamed to nb.log_text; a deprecated forwarding shim
+        # remains (warns once per process, removed in a later release).
+        assert hasattr(nebo, "log")
 
     def test_import_nebo_as_nb(self) -> None:
         """import nebo as nb should work."""
         import nebo as nb
         assert hasattr(nb, "fn")
-        assert hasattr(nb, "log")
+        assert hasattr(nb, "log_text")
 
     def test_import_core_state(self) -> None:
         """nebo.core.state should be importable."""
@@ -64,7 +67,7 @@ class TestNamespaceImports:
     def test_import_logging_logger(self) -> None:
         """nebo.logging.logger should be importable."""
         from nebo.logging.logger import (
-            log,
+            log_text,
             log_line,
             log_bar,
             log_pie,
@@ -74,7 +77,7 @@ class TestNamespaceImports:
             log_audio,
             md,
         )
-        assert log is not None
+        assert log_text is not None
         assert log_line is not None and log_bar is not None
         assert log_pie is not None and log_scatter is not None
         assert log_histogram is not None

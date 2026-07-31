@@ -16,7 +16,7 @@ from nebo.core.fileformat import NeboFileReader
 from nebo.server.daemon import DaemonState, create_daemon_app
 
 RUN_START = {"type": "run_start", "data": {"script_path": "t.py"}}
-A_LOG = {"type": "log", "loggable_id": "__global__", "message": "hi"}
+A_TEXT = {"type": "text", "loggable_id": "__global__", "message": "hi"}
 
 
 def _app(mode, remote_dir=None):
@@ -47,7 +47,7 @@ class TestLocalRejection:
 
     def test_unknown_run_event_rejected(self):
         _, client = _app("local")
-        resp = client.post("/events?run_id=ghost", json=[A_LOG])
+        resp = client.post("/events?run_id=ghost", json=[A_TEXT])
         assert resp.status_code == 409
 
     def test_known_run_annotation_accepted(self):
@@ -55,26 +55,26 @@ class TestLocalRejection:
         # on a local-only daemon (only run *creation* is refused).
         state, client = _app("local")
         state.create_run("t.py", run_id="known")
-        resp = client.post("/events?run_id=known", json=[A_LOG])
+        resp = client.post("/events?run_id=known", json=[A_TEXT])
         assert resp.status_code == 200
-        logs = client.get("/runs/known/logs").json()["logs"]
-        assert logs[-1]["message"] == "hi"
+        texts = client.get("/runs/known/text").json()["texts"]
+        assert texts[-1]["message"] == "hi"
 
 
 class TestRemoteEphemeral:
     def test_accepts_but_persists_nothing(self, tmp_path):
         _, client = _app("remote-ephemeral")
-        resp = client.post("/events?run_id=r1", json=[RUN_START, A_LOG])
+        resp = client.post("/events?run_id=r1", json=[RUN_START, A_TEXT])
         assert resp.status_code == 200
         assert not list(tmp_path.glob("*.nebo"))
-        logs = client.get("/runs/r1/logs").json()["logs"]
-        assert logs[-1]["message"] == "hi"
+        texts = client.get("/runs/r1/text").json()["texts"]
+        assert texts[-1]["message"] == "hi"
 
 
 class TestRemote:
     def test_writes_readable_file(self, tmp_path):
         _, client = _app("remote", remote_dir=tmp_path)
-        client.post("/events?run_id=r1", json=[RUN_START, A_LOG])
+        client.post("/events?run_id=r1", json=[RUN_START, A_TEXT])
         client.post(
             "/events?run_id=r1", json=[{"type": "run_completed", "data": {}}]
         )
@@ -86,7 +86,7 @@ class TestRemote:
             msgs = [
                 e["payload"].get("message")
                 for e in reader.read_entries()
-                if e["type"] == "log"
+                if e["type"] == "text"
             ]
         assert msgs == ["hi"]
 
@@ -151,10 +151,10 @@ class TestWriterSourceGating:
         state.mode = "remote"
         state._remote_dir = tmp_path
         await state.ingest_events(
-            [RUN_START, A_LOG], run_id="r1", source="network",
+            [RUN_START, A_TEXT], run_id="r1", source="network",
         )
         await state.ingest_events(
-            [{"type": "log", "loggable_id": "__global__",
+            [{"type": "text", "loggable_id": "__global__",
               "message": "from-file"}],
             run_id="r1", source="watcher",
         )
@@ -164,7 +164,7 @@ class TestWriterSourceGating:
         )
         # The alias guard drops the watcher batch before RAM, and the writer
         # gate keeps the file to network entries only.
-        assert [l.message for l in state.runs["r1"].logs] == ["hi"]
+        assert [l.message for l in state.runs["r1"].texts] == ["hi"]
         files = list(tmp_path.glob("*.nebo"))
         assert len(files) == 1
         with files[0].open("rb") as f:
@@ -173,7 +173,7 @@ class TestWriterSourceGating:
             msgs = [
                 e["payload"].get("message")
                 for e in reader.read_entries()
-                if e["type"] == "log"
+                if e["type"] == "text"
             ]
         assert msgs == ["hi"]
 
@@ -186,16 +186,16 @@ class TestWriterSourceGating:
         state.mode = "remote"
         state._remote_dir = tmp_path
         await state.ingest_events(
-            [RUN_START, A_LOG], run_id="r1", source="network",
+            [RUN_START, A_TEXT], run_id="r1", source="network",
         )
-        await state.ingest_events([A_LOG], run_id="r1", source="watcher")
-        assert [l.message for l in state.runs["r1"].logs] == ["hi"]
+        await state.ingest_events([A_TEXT], run_id="r1", source="watcher")
+        assert [l.message for l in state.runs["r1"].texts] == ["hi"]
         # Watcher-owned runs keep accepting watcher events as before.
         await state.ingest_events(
-            [RUN_START, A_LOG], run_id="r2", source="watcher",
+            [RUN_START, A_TEXT], run_id="r2", source="watcher",
         )
-        await state.ingest_events([A_LOG], run_id="r2", source="watcher")
-        assert [l.message for l in state.runs["r2"].logs] == ["hi", "hi"]
+        await state.ingest_events([A_TEXT], run_id="r2", source="watcher")
+        assert [l.message for l in state.runs["r2"].texts] == ["hi", "hi"]
 
     @pytest.mark.asyncio
     async def test_watcher_run_start_does_not_reopen_writer(self, tmp_path):

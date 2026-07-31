@@ -171,7 +171,7 @@ async function walkDrawioAtoms(
         kind === 'exec-count' ||
         kind === 'docstring' ||
         kind === 'config-row' ||
-        kind === 'log-line'
+        kind === 'text-line'
       ) {
         const cs = window.getComputedStyle(el)
         atoms.push({

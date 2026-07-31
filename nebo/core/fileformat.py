@@ -52,6 +52,13 @@ Format versions:
           base64 ASCII string. Consumers accept both; base64 encoding now
           only happens at the JSON wire boundary (network transport).
 
+        * (Later amendment, no version bump.) Text entries are written as
+          ``text`` (code 9): payload ``{type: "text", loggable_id, name,
+          message, step, timestamp}`` — no level field. ``log`` (code 0)
+          is the legacy spelling of the same entry; readers keep it in the
+          table and every ingest path normalizes ``log`` → ``text``, so
+          older files decode unchanged.
+
 Event semantics note: ``run_completed`` (code 16) is a *writer-finalization
 marker* only — it flushes the file's final frame and, on the daemon, closes
 the per-run writer. It carries no lifecycle state: there is no ``ended_at``
@@ -91,7 +98,7 @@ MAGIC = b"nebo"
 # ``node_register`` (code 4) is retained purely for reading v1 files; v2
 # writers emit ``loggable_register`` (code 16) instead.
 ENTRY_TYPES = {
-    "log": 0,
+    "log": 0,  # legacy spelling of "text"; kept for backward read compat
     "metric": 1,
     "image": 2,
     "audio": 3,
@@ -100,7 +107,7 @@ ENTRY_TYPES = {
     # 6 was "error" (removed)
     # 7 was "ask" (removed)
     "ui_config": 8,
-    "text": 9,
+    "text": 9,  # named text streams; writers emit this instead of "log"
     "progress": 10,
     "config": 11,
     "description": 12,

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useStore, type RunState, type ImageEntry, type AudioEntry } from '@/store'
-import { api, type LogEntry, type MetricEntry, type LoggableMetricSeries } from '@/lib/api'
+import { api, type TextEntry, type MetricEntry, type LoggableMetricSeries } from '@/lib/api'
 
 // ─── Non-destructive hydration ────────────────────────────────────────────
 //
@@ -13,14 +13,14 @@ import { api, type LogEntry, type MetricEntry, type LoggableMetricSeries } from 
 //
 // Every merge is keyed so the same emission seen on both paths dedupes to one.
 
-function logKey(l: LogEntry): string {
-  return `${l.timestamp}|${l.node ?? ''}|${l.step ?? ''}|${l.message}`
+function textKey(t: TextEntry): string {
+  return `${t.timestamp}|${t.node ?? ''}|${t.step ?? ''}|${t.message}`
 }
 
-function mergeLogs(rest: LogEntry[], live: LogEntry[]): LogEntry[] {
-  const seen = new Set(rest.map(logKey))
+function mergeTexts(rest: TextEntry[], live: TextEntry[]): TextEntry[] {
+  const seen = new Set(rest.map(textKey))
   // REST is the authoritative ordered prefix; append any live-only tail.
-  return [...rest, ...live.filter(l => !seen.has(logKey(l)))]
+  return [...rest, ...live.filter(t => !seen.has(textKey(t)))]
 }
 
 function mergeByMediaId<T extends { mediaId: string }>(
@@ -73,30 +73,46 @@ function mergeMetrics(
 }
 
 function fetchSingleRun(runId: string, store: ReturnType<typeof useStore.getState>) {
-  const { setRunGraph, setRunLogs, setRunMetrics, setRunImages, setRunAudio, setRunAlerts } = store
+  const { setRunGraph, setRunTexts, setRunMetrics, setRunImages, setRunAudio, setRunAlerts, setRunHydrating } = store
+  setRunHydrating(runId, true)
   // Read the *current* live slice inside each `.then()` (not from the captured
   // `store` snapshot) so WS entries that landed during the fetch are merged in.
   const current = () => useStore.getState().runs.get(runId)
   return Promise.all([
     api.getRunGraph(runId).then(g => setRunGraph(runId, g)),
-    // Daemon returns logs with `loggable_id` while the UI's LogEntry stores
-    // it as `node` (mirroring the WS path). Normalize here so REST-loaded
-    // logs match the WS shape.
-    api.getRunLogs(runId, { limit: 500 }).then(d => {
-      const normalized: LogEntry[] = d.logs.map((l: unknown) => {
+    // Daemon returns text entries with `loggable_id` while the UI's
+    // TextEntry stores it as `node` (mirroring the WS path). Normalize here
+    // so REST-loaded entries match the WS shape.
+    api.getRunText(runId, { limit: 500 }).then(d => {
+      const normalized: TextEntry[] = d.texts.map((l: unknown) => {
         const e = l as Record<string, unknown>
         return {
           timestamp: e.timestamp as number,
           node: (e.node ?? e.loggable_id ?? null) as string | null,
           name: (e.name as string) ?? 'text',
           message: (e.message ?? '') as string,
-          level: (e.level ?? 'info') as string,
           step: (e.step ?? null) as number | null,
         }
       })
-      setRunLogs(runId, mergeLogs(normalized, current()?.logs ?? []))
+      setRunTexts(runId, mergeTexts(normalized, current()?.texts ?? []))
     }),
-    api.getRunMetrics(runId).then(d => setRunMetrics(runId, mergeMetrics(d.metrics, current()?.loggableMetrics ?? {}))),
+    // Two-phase metrics hydration: the decimated default paints charts
+    // immediately (a million-point run would otherwise be a ~70 MB first
+    // response), then EVERY datapoint is delivered — if anything was
+    // decimated, a full-fidelity (`points: 0`) fetch replaces the series
+    // wholesale. The per-chart "N of M pts" badge only shows during the
+    // window between the two, and `hydratingRuns` stays set until the
+    // full payload has landed.
+    api.getRunMetrics(runId).then(d => {
+      setRunMetrics(runId, mergeMetrics(d.metrics, current()?.loggableMetrics ?? {}))
+      const anyDownsampled = Object.values(d.metrics).some(byName =>
+        Object.values(byName).some(s => s.downsampled),
+      )
+      if (!anyDownsampled) return
+      return api.getRunMetrics(runId, { points: 0 }).then(full =>
+        setRunMetrics(runId, mergeMetrics(full.metrics, current()?.loggableMetrics ?? {})),
+      )
+    }),
     api.getRunImages(runId).then(d => {
       const mapped: Record<string, ImageEntry[]> = {}
       for (const [nodeId, entries] of Object.entries(d.images)) {
@@ -121,7 +137,9 @@ function fetchSingleRun(runId: string, store: ReturnType<typeof useStore.getStat
     // setRunAlerts merges non-destructively itself (keyed dedupe against
     // WS-appended entries), matching the other slices' merge semantics.
     api.getRunAlerts(runId).then(d => setRunAlerts(runId, d.alerts)),
-  ]).catch((err) => { console.warn(`[useRunData] Failed to fetch data for run ${runId}:`, err) })
+  ])
+    .catch((err) => { console.warn(`[useRunData] Failed to fetch data for run ${runId}:`, err) })
+    .finally(() => setRunHydrating(runId, false))
 }
 
 export function useRunData(runId: string | null): RunState | null {

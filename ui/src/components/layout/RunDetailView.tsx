@@ -6,6 +6,7 @@ import { useComparisonContext } from '@/hooks/useComparisonContext'
 import { DagGraph } from '@/components/graph/DagGraph'
 import { LoggableGridView } from '@/components/graph/LoggableGridView'
 import { RunHoverInfo } from '@/components/runs/RunHoverInfo'
+import { runDisplayName } from '@/lib/runTree'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { PanelRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -42,10 +43,11 @@ export function RunDetailView() {
   const setViewMode = useStore(s => s.setViewMode)
   const effectiveViewMode = viewMode
   const runColors = useStore(s => s.runColors)
-  const runNames = useStore(s => s.runNames)
   const runs = useStore(s => s.runs)
   const rightPanelOpen = useStore(s => s.rightPanelOpen)
   const toggleRightPanel = useStore(s => s.toggleRightPanel)
+  const hydrating = useStore(s => (effectiveRunId ? s.hydratingRuns.has(effectiveRunId) : false))
+  const runTreePlacement = useStore(s => (effectiveRunId ? s.runTree.runs[effectiveRunId] ?? null : null))
 
   if (!selectedRunId) {
     return (
@@ -68,7 +70,13 @@ export function RunDetailView() {
 
   const scriptName = isComparison
     ? `Comparing ${comparisonRunIds.length} runs`
-    : (run.summary.run_name ?? run.summary.script_path.split('/').pop() ?? run.summary.script_path)
+    : runDisplayName(run.summary)
+  const groupPath = !isComparison ? runTreePlacement : null
+  const startedAt = !isComparison && run.summary.started_at
+    ? new Date(run.summary.started_at).toLocaleString(undefined, {
+        month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+      })
+    : null
 
   return (
     <div className="flex flex-col h-full">
@@ -79,12 +87,21 @@ export function RunDetailView() {
             {/* Text items align on their baselines (mixed font sizes look
                 off-kilter when box-centered); the group as a whole still
                 centers against the tabs/buttons. */}
+            {/* "<path>/<run name> <run id> <date>" */}
             <div className="flex items-baseline gap-3 min-w-0">
-              <span className="text-sm font-medium whitespace-nowrap">{scriptName}</span>
+              <span className="min-w-0 truncate text-sm font-medium">
+                {groupPath && (
+                  <span className="text-muted-foreground font-normal">{groupPath}/</span>
+                )}
+                {scriptName}
+              </span>
               {!isComparison && <RunIdChip runId={run.summary.id} />}
-              {run.graph?.workflow_description && (
-                <span className="text-xs text-muted-foreground truncate max-w-xs" title={run.graph.workflow_description}>
-                  {run.graph.workflow_description.split('\n')[0].replace(/^#\s*/, '')}
+              {startedAt && (
+                <span className="text-xs text-muted-foreground whitespace-nowrap">{startedAt}</span>
+              )}
+              {hydrating && (
+                <span className="text-xs text-muted-foreground whitespace-nowrap animate-pulse">
+                  loading history…
                 </span>
               )}
             </div>
@@ -111,7 +128,7 @@ export function RunDetailView() {
           {isComparison && comparisonRunIds.length > 0 && (() => {
             const names = comparisonRunIds.map(rid => {
               const r = runs.get(rid)
-              return runNames.get(rid) || r?.summary.run_name || r?.summary.script_path.split('/').pop() || rid
+              return r?.summary.run_name || r?.summary.script_path.split('/').pop() || rid
             })
             const fullText = `Showing graph of ${names[0]}, and comparing it with ${names.slice(1).join(', ')}`
             return (

@@ -11,7 +11,9 @@ from typing import Any, Optional
 
 class MessageType(str, Enum):
     """Types of messages in the protocol."""
-    LOG = "log"
+    # Named text streams. The legacy wire/file value is "log" — readers
+    # accept both, writers emit "text" (see daemon ingest normalization).
+    TEXT = "text"
     METRIC = "metric"
     METRIC_BATCH = "metric_batch"
     IMAGE = "image"
@@ -48,7 +50,7 @@ class Message:
     def from_json(cls, raw: str) -> Message:
         d = json.loads(raw)
         return cls(
-            type=MessageType(d["type"]) if d.get("type") in MessageType._value2member_map_ else d.get("type", "log"),
+            type=MessageType(d["type"]) if d.get("type") in MessageType._value2member_map_ else d.get("type", "text"),
             data=d.get("data", {}),
             timestamp=d.get("timestamp", time.time()),
             loggable_id=d.get("loggable_id"),

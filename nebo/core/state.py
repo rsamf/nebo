@@ -10,11 +10,11 @@ from dataclasses import dataclass, field
 from typing import Any, Deque, Literal, Optional
 
 
-# Number of recent log entries the SDK keeps per loggable for the
-# terminal "Recent logs" panel. The daemon's `.nebo` file is the
-# source of truth for the full log history; the SDK only mirrors a
-# small tail to render locally.
-RECENT_LOGS_MAXLEN = 200
+# Number of recent text entries the SDK keeps per loggable for the
+# terminal "Recent" panel. The daemon's `.nebo` file is the source of
+# truth for the full text history; the SDK only mirrors a small tail
+# to render locally.
+RECENT_TEXTS_MAXLEN = 200
 
 # Cap on return-origin entries that must hold STRONG references (values
 # whose type doesn't support weakrefs: list/dict/tuple/str/...). Beyond
@@ -47,13 +47,13 @@ class LoggableInfo:
     """Base class for any entity that the terminal renders.
 
     The SDK keeps the bare minimum the local terminal display needs
-    (recent logs, progress). Metric values, image metadata,
+    (recent text entries, progress). Metric values, image metadata,
     and audio metadata are no longer mirrored — those flow straight
     to the daemon, which persists them in the `.nebo` file.
     """
     loggable_id: str = ""
     kind: Literal["node", "global", "agent"] = "node"
-    logs: Deque[dict] = field(default_factory=lambda: deque(maxlen=RECENT_LOGS_MAXLEN))
+    texts: Deque[dict] = field(default_factory=lambda: deque(maxlen=RECENT_TEXTS_MAXLEN))
     progress: Optional[dict] = None
 
 

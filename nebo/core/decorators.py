@@ -11,6 +11,44 @@ from nebo.core.state import NodeInfo, _current_node, _current_group, get_state
 
 F = TypeVar("F", bound=Callable[..., Any])
 
+# Decoration-time identity per node_id: (module, qualname). Loggable ids
+# must be unique — two *different* functions decorating to the same id
+# (e.g. top-level `step()` in two modules both qualname "step") would
+# silently merge into one node with interleaved streams and conflated
+# edges. The newcomer gets module-qualified instead; pathological
+# same-module duplicates fall back to #N suffixes. Process-level and
+# deliberately not reset by nb.reset(): re-decorating the same function
+# is idempotent, and ids must stay stable within a process.
+_node_identities: dict[str, tuple[str, str]] = {}
+
+
+def _resolve_node_id(f: Callable[..., Any], base_id: str) -> str:
+    """Return a unique node_id for ``f``, module-qualifying on collision."""
+    ident = (getattr(f, "__module__", "") or "", f.__qualname__)
+    claimed = _node_identities.get(base_id)
+    if claimed is None or claimed == ident:
+        _node_identities[base_id] = ident
+        return base_id
+    qualified = f"{ident[0]}.{base_id}" if ident[0] else f"{base_id}#2"
+    candidate = qualified
+    n = 2
+    while True:
+        claimed = _node_identities.get(candidate)
+        if claimed is None or claimed == ident:
+            break
+        n += 1
+        candidate = f"{qualified}#{n}"
+    already_qualified = _node_identities.get(candidate) == ident
+    _node_identities[candidate] = ident
+    if not already_qualified:
+        warnings.warn(
+            f"@nb.fn: node id '{base_id}' is already used by a different "
+            f"function; registering this one as '{candidate}'. Rename one "
+            "of the functions to silence this.",
+            stacklevel=4,
+        )
+    return candidate
+
 
 @overload
 def fn(func: F) -> F: ...
@@ -148,9 +186,10 @@ def _decorate_function(f, depends_on, group=None, ui_hints=None):
     """Wrap a single function with scope tracking."""
     # Use ClassName.method_name for methods in decorated classes
     if group:
-        node_id = f"{group}.{f.__name__}"
+        base_id = f"{group}.{f.__name__}"
     else:
-        node_id = f.__qualname__
+        base_id = f.__qualname__
+    node_id = _resolve_node_id(f, base_id)
     registered = False
 
     # Resolve depends_on to node ID strings at decoration time
