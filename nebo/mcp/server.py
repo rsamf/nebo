@@ -66,6 +66,38 @@ MCP_TOOLS = [
         "description": "Get workflow-level description and all node docstrings.",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "nebo_list_images",
+        "description": (
+            "List a run's images: per-loggable entries with name, step, "
+            "timestamp, and the content-addressed media_id used by "
+            "nebo_get_image."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "run_id": {"type": "string", "description": "The run ID."},
+            },
+            "required": ["run_id"],
+        },
+    },
+    {
+        "name": "nebo_get_image",
+        "description": (
+            "Fetch one logged image (media_id from nebo_list_images). "
+            "Returns the actual image as an MCP image content block, so "
+            "it renders inline in the conversation and is visible to "
+            "both the model and the user."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "run_id": {"type": "string", "description": "The run ID."},
+                "media_id": {"type": "string", "description": "Content-addressed media id from nebo_list_images."},
+            },
+            "required": ["run_id", "media_id"],
+        },
+    },
     # ── Action Tools ──
     {
         "name": "nebo_get_run_status",
@@ -374,6 +406,8 @@ async def handle_tool_call(name: str, arguments: dict[str, Any], server_url: str
         "nebo_get_text": lambda a: tools.get_text(a.get("loggable_id"), a.get("run_id"), a.get("limit", 100), server_url),
         "nebo_get_metrics": lambda a: tools.get_metrics(a["loggable_id"], a.get("name"), server_url),
         "nebo_get_description": lambda a: tools.get_description(server_url),
+        "nebo_list_images": lambda a: tools.list_images(a["run_id"], server_url),
+        "nebo_get_image": lambda a: tools.get_image(a["run_id"], a["media_id"], server_url),
         # Action
         "nebo_get_run_status": lambda a: tools.get_run_status(a["run_id"], server_url),
         "nebo_get_run_history": lambda a: tools.get_run_history(server_url),

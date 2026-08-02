@@ -50,6 +50,43 @@ async def get_loggable_status(loggable_id: str, run_id: Optional[str] = None, se
         return _daemon_unreachable(server_url, e)
 
 
+async def list_images(run_id: str, server_url: str = _DEFAULT_URL) -> dict[str, Any]:
+    """List a run's images with their content-addressed media ids."""
+    try:
+        return _client.list_images(run_id, url=server_url)
+    except Exception as e:
+        return _daemon_unreachable(server_url, e)
+
+
+async def get_image(run_id: str, media_id: str, server_url: str = _DEFAULT_URL) -> dict[str, Any]:
+    """Fetch one image as an MCP image content block.
+
+    Returns `{"_mcp_content": [image block]}` — the stdio bridge emits
+    that list verbatim as the tool result's content, so MCP clients
+    render the image inline instead of receiving base64-in-JSON text.
+    """
+    try:
+        data, ctype = _client.get_media(run_id, media_id, url=server_url)
+    except Exception as e:
+        return _daemon_unreachable(server_url, e)
+    if not ctype.startswith("image/"):
+        return {
+            "error": (
+                f"media '{media_id}' is {ctype}, not an image — "
+                "download it with `nebo audio get` instead"
+            ),
+        }
+    import base64
+
+    return {
+        "_mcp_content": [{
+            "type": "image",
+            "data": base64.b64encode(data).decode("ascii"),
+            "mimeType": ctype,
+        }],
+    }
+
+
 async def get_text(
     loggable_id: Optional[str] = None,
     run_id: Optional[str] = None,

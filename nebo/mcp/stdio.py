@@ -53,14 +53,17 @@ async def _handle_request(request: dict, server_url: str) -> dict:
         tool_args = params.get("arguments", {})
         try:
             result = await handle_tool_call(tool_name, tool_args, server_url)
+            # `_mcp_content` is the handlers' escape hatch for returning
+            # real MCP content blocks (e.g. nebo_get_image's inline
+            # image) instead of the default JSON-as-text wrapping.
+            if isinstance(result, dict) and "_mcp_content" in result:
+                content = result["_mcp_content"]
+            else:
+                content = [{"type": "text", "text": json.dumps(result, default=str)}]
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "result": {
-                    "content": [
-                        {"type": "text", "text": json.dumps(result, default=str)},
-                    ],
-                },
+                "result": {"content": content},
             }
         except Exception as e:
             return {

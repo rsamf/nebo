@@ -171,6 +171,41 @@ def get_metrics(
     return _get(path, **conn)
 
 
+def list_images(run_id: str, **conn) -> Any:
+    """List a run's images: {loggable_id: [{name, step, media_id, ...}]}."""
+    return _get(f"/runs/{urllib.parse.quote(run_id)}/images", **conn)
+
+
+def list_audio(run_id: str, **conn) -> Any:
+    """List a run's audio: {loggable_id: [{name, sr, step, media_id, ...}]}."""
+    return _get(f"/runs/{urllib.parse.quote(run_id)}/audio", **conn)
+
+
+def get_media(
+    run_id: str,
+    media_id: str,
+    *,
+    url: Optional[str] = None,
+    port: Optional[int] = None,
+    api_token: Optional[str] = None,
+    timeout: float = 10.0,
+) -> tuple[bytes, str]:
+    """Fetch one media object's raw bytes. Returns (bytes, content_type).
+
+    media_id comes from list_images/list_audio; it is content-addressed,
+    so the same id always yields the same bytes.
+    """
+    base = _resolve_url(url=url, port=port)
+    token = _resolve_token(api_token)
+    path = f"/runs/{urllib.parse.quote(run_id)}/media/{urllib.parse.quote(media_id)}"
+    req = urllib.request.Request(f"{base}{path}", method="GET")
+    if token:
+        req.add_header("X-Nebo-Token", token)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        ctype = resp.headers.get("Content-Type", "application/octet-stream")
+        return resp.read(), ctype
+
+
 def load_file(filepath: str, **conn) -> Any:
     return _post("/load", {"filepath": filepath}, **conn)
 

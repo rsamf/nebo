@@ -769,3 +769,93 @@ class TestIsAlive:
             s.bind(("127.0.0.1", 0))
             port = s.getsockname()[1]
         assert _is_alive(port) is False
+
+
+class TestMediaCli:
+    """`images ls` / `audio ls` list a run's media; `images get` /
+    `audio get` download one object so an agent can Read/attach it."""
+
+    def test_images_ls_json(self, monkeypatch):
+        calls = {}
+
+        def fake(run_id, **conn):
+            calls["run_id"] = run_id
+            return {"images": {"train": [
+                {"node": "train", "media_id": "m1", "name": "sample",
+                 "step": 3, "timestamp": 1.0, "labels": None},
+            ]}}
+
+        monkeypatch.setattr("nebo.client.list_images", fake)
+        out = _run_cli(["images", "ls", "--run", "r1", "--json"])
+        assert calls["run_id"] == "r1"
+        assert json.loads(out)["images"]["train"][0]["media_id"] == "m1"
+
+    def test_images_ls_human_lists_media_ids(self, monkeypatch):
+        monkeypatch.setattr(
+            "nebo.client.list_images",
+            lambda run_id, **conn: {"images": {"train": [
+                {"node": "train", "media_id": "m1", "name": "sample",
+                 "step": 3, "timestamp": 1.0, "labels": None},
+            ]}},
+        )
+        out = _run_cli(["images", "ls", "--run", "r1"])
+        assert "m1" in out and "sample" in out and "train" in out
+
+    def test_audio_ls_json(self, monkeypatch):
+        monkeypatch.setattr(
+            "nebo.client.list_audio",
+            lambda run_id, **conn: {"audio": {"__global__": [
+                {"node": "__global__", "media_id": "a1", "name": "clip",
+                 "sr": 16000, "step": None, "timestamp": 2.0},
+            ]}},
+        )
+        out = _run_cli(["audio", "ls", "--run", "r1", "--json"])
+        assert json.loads(out)["audio"]["__global__"][0]["media_id"] == "a1"
+
+    def test_images_get_writes_file_and_prints_path(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "nebo.client.get_media",
+            lambda run_id, media_id, **conn: (b"\x89PNGdata", "image/png"),
+        )
+        target = tmp_path / "x.png"
+        out = _run_cli(["images", "get", "m1", "--run", "r1", "-o", str(target)])
+        assert target.read_bytes() == b"\x89PNGdata"
+        assert str(target) in out
+
+    def test_audio_get_default_name_uses_content_type(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "nebo.client.get_media",
+            lambda run_id, media_id, **conn: (b"RIFFdata", "audio/wav"),
+        )
+        monkeypatch.chdir(tmp_path)
+        _run_cli(["audio", "get", "a1", "--run", "r1"])
+        assert (tmp_path / "a1.wav").read_bytes() == b"RIFFdata"
+
+    def test_images_get_json_reports_path_and_type(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "nebo.client.get_media",
+            lambda run_id, media_id, **conn: (b"\x89PNGdata", "image/png"),
+        )
+        target = tmp_path / "y.png"
+        out = _run_cli(["images", "get", "m1", "--run", "r1", "-o", str(target), "--json"])
+        info = json.loads(out)
+        assert info["path"] == str(target)
+        assert info["content_type"] == "image/png"
+        assert info["bytes"] == len(b"\x89PNGdata")
+
+    def test_images_get_rejects_audio_media(self, tmp_path, monkeypatch):
+        """The kind-specific command refuses the other kind's media and
+        points at the right command instead of writing a mislabeled file."""
+        monkeypatch.setattr(
+            "nebo.client.get_media",
+            lambda run_id, media_id, **conn: (b"RIFFdata", "audio/wav"),
+        )
+        monkeypatch.chdir(tmp_path)
+        code, err = _run_cli_with_stderr(["images", "get", "a1", "--run", "r1"])
+        assert code == 1
+        assert "audio/wav" in err and "nebo audio get" in err
+        assert not list(tmp_path.iterdir())  # nothing written
+
+    def test_no_top_level_media_command(self):
+        code, _err = _run_cli_with_stderr(["media", "get", "m1", "--run", "r1"])
+        assert code == 2  # argparse: unknown command

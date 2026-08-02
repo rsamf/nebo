@@ -926,6 +926,86 @@ def cmd_audio_log(args: argparse.Namespace) -> None:
     print(json.dumps(result) if args.json else result.get("status", "ok"))
 
 
+def _cmd_media_ls(args: argparse.Namespace, kind: str) -> None:
+    """List a run's images or audio with their media ids."""
+    from nebo import client
+
+    lister = client.list_images if kind == "images" else client.list_audio
+    result = lister(args.run, **_conn_kwargs(args))
+    if args.json:
+        print(json.dumps(result))
+        return
+
+    by_loggable = result.get(kind, {})
+    entries = [(lid, e) for lid, es in by_loggable.items() for e in es]
+    if not entries:
+        print(f"No {kind} entries found.")
+        return
+    for lid, e in entries:
+        step = e.get("step")
+        step_tag = f"@{step}" if step is not None else ""
+        sr_tag = f" sr={e['sr']}" if kind == "audio" and e.get("sr") else ""
+        print(f"  [{lid}] {e.get('name')}{step_tag}{sr_tag} media_id={e.get('media_id')}")
+
+
+def cmd_images(args: argparse.Namespace) -> None:
+    """Route `nebo images <action>`: `log` writes, `ls` lists, `get` downloads."""
+    if args.images_action == "ls":
+        _cmd_media_ls(args, "images")
+    elif args.images_action == "get":
+        _cmd_media_get(args, "images")
+    else:
+        cmd_images_log(args)
+
+
+def cmd_audio(args: argparse.Namespace) -> None:
+    """Route `nebo audio <action>`: `log` writes, `ls` lists, `get` downloads."""
+    if args.audio_action == "ls":
+        _cmd_media_ls(args, "audio")
+    elif args.audio_action == "get":
+        _cmd_media_get(args, "audio")
+    else:
+        cmd_audio_log(args)
+
+
+# Extensions for `images/audio get` filenames when no --out is given; the
+# daemon sniffs media to exactly these two types (see _sniff_mime).
+_MEDIA_EXTENSIONS = {"image/png": ".png", "audio/wav": ".wav"}
+
+
+def _cmd_media_get(args: argparse.Namespace, kind: str) -> None:
+    """Download one media object to a file and print its path, so an
+    agent can chain into reading/attaching the file. The command is
+    kind-scoped (`images get` / `audio get`): fetching the other kind's
+    media_id errors with a pointer instead of writing a mislabeled file."""
+    from nebo import client
+
+    data, ctype = client.get_media(args.run, args.media_id, **_conn_kwargs(args))
+    base_ctype = ctype.split(";")[0].strip()
+    want = "image/" if kind == "images" else "audio/"
+    if not base_ctype.startswith(want):
+        other = "audio" if kind == "images" else "images"
+        print(
+            f"media '{args.media_id}' is {base_ctype}, not {want}* — "
+            f"use `nebo {other} get`",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    out = Path(
+        args.out
+        or f"{args.media_id}{_MEDIA_EXTENSIONS.get(base_ctype, '.bin')}"
+    )
+    out.write_bytes(data)
+    if args.json:
+        print(json.dumps({
+            "path": str(out),
+            "content_type": base_ctype,
+            "bytes": len(data),
+        }))
+    else:
+        print(out.resolve())
+
+
 def _lazy_deploy(args: argparse.Namespace) -> None:
     """Defer the huggingface_hub import — it's an optional dependency."""
     from nebo.cli_deploy import cmd_deploy
@@ -1418,8 +1498,25 @@ def main() -> None:
     p_text_ls.add_argument("--run", help="Run ID")
     p_text_ls.add_argument("--node", help="Filter by node")
     p_text_ls.add_argument("--limit", type=int, default=100)
-    _add_log_subparser("images")
-    _add_log_subparser("audio")
+
+    # images/audio `ls` lists a run's media with content-addressed
+    # media_ids; `get` then downloads one object by id.
+    for name, sub in (("images", _add_log_subparser("images")),
+                      ("audio", _add_log_subparser("audio"))):
+        p_media_ls = sub.add_parser(
+            "ls", parents=[_common_conn_parser()], help=f"List a run's {name}",
+        )
+        p_media_ls.add_argument("--run", required=True, help="Run ID")
+        p_media_get = sub.add_parser(
+            "get", parents=[_common_conn_parser()],
+            help=f"Download one of a run's {name} (id from `{name} ls`) to a file",
+        )
+        p_media_get.add_argument("media_id", help="Content-addressed media id")
+        p_media_get.add_argument("--run", required=True, help="Run ID")
+        p_media_get.add_argument(
+            "-o", "--out",
+            help="Output path (default: <media_id> + extension from content type)",
+        )
 
     # deploy
     p_deploy = subparsers.add_parser(
@@ -1456,8 +1553,8 @@ def main() -> None:
         "alerts": cmd_alerts,
         "metrics": cmd_metrics,
         "text": cmd_text,
-        "images": cmd_images_log,
-        "audio": cmd_audio_log,
+        "images": cmd_images,
+        "audio": cmd_audio,
     }
 
     handler = commands.get(args.command)

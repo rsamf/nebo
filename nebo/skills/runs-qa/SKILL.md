@@ -258,6 +258,24 @@ Exactly one of `path` / `url` / `data` per entry. Examples:
 `path` is the most natural form when you've just generated the file
 yourself (e.g. matplotlib `savefig` to a tmp file).
 
+### Reading media back
+
+To *view* a run's media (e.g. inspect a logged sample, or show it to
+the user), list it and download by `media_id`:
+
+    nebo images ls --run <R>           # per-loggable: name@step media_id=...
+    nebo audio ls  --run <R>           # same, plus sr=...
+    nebo images get <media_id> --run <R> -o /tmp/sample.png
+    nebo audio get  <media_id> --run <R> -o /tmp/sample.wav
+
+`get` prints the written path — read the file to see the image
+yourself, and attach/send it if the user should see it too. media_ids
+are content-addressed (sha256 of the bytes): stable across daemon
+restarts, and byte-identical media logged from several places shares
+one id. Over MCP, `nebo_get_image` returns the image directly as an
+inline image content block (no temp file needed); audio has no MCP
+read path — use the CLI download.
+
 ## Multi-run Q&A
 
 For one metric across several runs, use the cross-run query directly:
@@ -355,6 +373,8 @@ are available without spawning subprocesses. Both transports are parallel
 | `nebo text log` | `nebo_log_text` |
 | `nebo images log` | `nebo_log_image` |
 | `nebo audio log` | `nebo_log_audio` |
+| `nebo images ls` | `nebo_list_images` |
+| `nebo images get` | `nebo_get_image` (renders inline) |
 | `nebo runs wait` | `nebo_wait_for_alert` |
 | `nebo tree` | `nebo_get_tree` |
 | `nebo groups add` | `nebo_create_group` |
