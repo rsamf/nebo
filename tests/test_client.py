@@ -546,7 +546,7 @@ class TestFlushRemainingWarning:
     ) -> None:
         client = DaemonClient(shutdown_timeout=0.05)
         client._buffer = [{"e": 1}]
-        client._post_batch = lambda batch: (False, RuntimeError("x"))  # type: ignore[method-assign]
+        client._post_packed = lambda events, packed: (False, RuntimeError("x"))  # type: ignore[method-assign]
 
         client._flush_remaining()
 

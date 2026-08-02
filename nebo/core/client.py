@@ -67,7 +67,7 @@ class DrainResult:
 
     `last_error` is None on full success (dropped == 0); on partial or
     full failure it carries `repr(exc)` of the most recent
-    `_post_batch` failure.
+    `_post_packed` failure.
     """
     sent: int
     dropped: int
