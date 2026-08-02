@@ -162,7 +162,11 @@ export function RunDetailView() {
           </div>
         ) : (
           <div className="flex-1 overflow-hidden">
-            <DagGraph runId={effectiveRunId!} />
+            {/* key: DagGraph's layout pipeline (useNodesState + measurement
+                effects reading getNodes()) must never span two runs — a
+                persistent instance re-lays the *old* run's measured nodes
+                over the new run's on switch (stale-DAG bug). */}
+            <DagGraph key={effectiveRunId!} runId={effectiveRunId!} />
           </div>
         )}
       </div>
