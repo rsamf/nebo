@@ -721,3 +721,51 @@ class TestCacheCommands:
         )
         assert code == 2
         assert "--all" in err
+
+
+class TestIsAlive:
+    """The daemon liveness probe must work without httpx installed."""
+
+    @staticmethod
+    def _health_server():
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == "/health":
+                    body = b'{"status": "ok"}'
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    self.send_error(404)
+
+            def log_message(self, *args):  # keep pytest output pristine
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return server
+
+    def test_is_alive_without_httpx(self, block_import):
+        from nebo.cli import _is_alive
+
+        server = self._health_server()
+        try:
+            with block_import("httpx"):
+                assert _is_alive(server.server_address[1]) is True
+        finally:
+            server.shutdown()
+
+    def test_is_alive_false_on_dead_port(self):
+        import socket
+
+        from nebo.cli import _is_alive
+
+        with socket.socket() as s:  # grab a port that is definitely closed
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        assert _is_alive(port) is False

@@ -10,6 +10,10 @@ Suite-wide invariants:
 
 from __future__ import annotations
 
+import builtins
+import contextlib
+import sys
+
 import pytest
 
 
@@ -17,6 +21,40 @@ import pytest
 def _quiet_nebo(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NEBO_NO_STORE", "1")
     monkeypatch.setenv("NEBO_QUIET", "1")
+
+
+@contextlib.contextmanager
+def blocked_import(prefix: str):
+    """Make `import <prefix>` (and submodules) raise ImportError.
+
+    Simulates an environment where an optional dependency (Pillow, httpx)
+    is not installed, so tests can prove nebo works without it.
+    """
+    saved = {
+        name: sys.modules.pop(name)
+        for name in list(sys.modules)
+        if name == prefix or name.startswith(prefix + ".")
+    }
+    real_import = builtins.__import__
+
+    def _blocked(name, *args, **kwargs):
+        if name == prefix or name.startswith(prefix + "."):
+            raise ImportError(f"import of {name!r} blocked by test")
+        return real_import(name, *args, **kwargs)
+
+    builtins.__import__ = _blocked
+    try:
+        yield
+    finally:
+        builtins.__import__ = real_import
+        sys.modules.update(saved)
+
+
+@pytest.fixture
+def block_import():
+    """`blocked_import` as a fixture (conftest isn't importable under
+    pytest 9's default importlib mode)."""
+    return blocked_import
 
 
 class CapturingClient:

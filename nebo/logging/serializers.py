@@ -25,7 +25,7 @@ class PendingMedia:
 
     def __init__(self, kind: str, payload: Any, sr: int | None = None) -> None:
         self.kind = kind
-        self._payload = payload  # PIL.Image (image) or int16 ndarray (audio)
+        self._payload = payload  # uint8 ndarray (image) or int16 ndarray (audio)
         self._sr = sr
         self._encoded: bytes | None = None
 
@@ -33,9 +33,9 @@ class PendingMedia:
         """Encode to PNG/WAV bytes. Idempotent; frees the copy after."""
         if self._encoded is None:
             if self.kind == "image":
-                buf = io.BytesIO()
-                self._payload.save(buf, format="PNG")
-                self._encoded = buf.getvalue()
+                from nebo.logging.png import encode_png
+
+                self._encoded = encode_png(self._payload)
             else:
                 self._encoded = _wav_bytes(self._payload, self._sr or 16000)
             self._payload = None
@@ -46,33 +46,30 @@ class PendingMedia:
         """Rough in-memory size, for transport buffer accounting."""
         if self._encoded is not None:
             return len(self._encoded)
-        payload = self._payload
-        n = getattr(payload, "nbytes", None)
-        if n is not None:
-            return int(n)
-        if hasattr(payload, "width") and hasattr(payload, "height"):
-            return payload.width * payload.height * 4
-        return 0
+        n = getattr(self._payload, "nbytes", None)
+        return int(n) if n is not None else 0
 
 
 def prepare_image(image: Any) -> PendingMedia:
     """Validate + copy an image input; PNG encoding is deferred.
 
-    Supports: PIL.Image, numpy array, torch tensor.
+    Supports: PIL.Image, numpy array, torch tensor. Pillow is not a nebo
+    dependency — it is only imported when *image* is a PIL Image, in
+    which case the caller's environment has it by definition.
 
     Raises:
         TypeError: If *image* is not a supported type (at the call site,
         exactly like the old eager path). Conversion errors from broken
         arrays also raise here — only the PNG compression is deferred.
     """
-    # PIL Image
+    # PIL Image (optional peer dependency, guarded exactly like torch)
     try:
         from PIL import Image as _PILImage
     except ImportError:
         _PILImage = None
 
     if _PILImage is not None and isinstance(image, _PILImage.Image):
-        return PendingMedia("image", image.copy())
+        return PendingMedia("image", _pil_to_array(image))
 
     # Torch tensor
     try:
@@ -81,7 +78,7 @@ def prepare_image(image: Any) -> PendingMedia:
         torch = None
 
     if torch is not None and isinstance(image, torch.Tensor):
-        return PendingMedia("image", _numpy_to_pil(image.detach().cpu().numpy()))
+        return PendingMedia("image", _normalize_array(image.detach().cpu().numpy()))
 
     # Numpy array
     try:
@@ -90,7 +87,7 @@ def prepare_image(image: Any) -> PendingMedia:
         np = None
 
     if np is not None and isinstance(image, np.ndarray):
-        return PendingMedia("image", _numpy_to_pil(image))
+        return PendingMedia("image", _normalize_array(image))
 
     raise TypeError(f"Cannot serialize image of type {type(image).__name__}")
 
@@ -100,10 +97,28 @@ def serialize_image(image: Any) -> bytes:
     return prepare_image(image).encode()
 
 
-def _numpy_to_pil(arr: Any) -> Any:
-    """Normalize a numpy array to an owned PIL Image (always a copy)."""
+def _pil_to_array(img: Any) -> Any:
+    """Convert a PIL image to an owned uint8 ndarray (L/LA/RGB/RGBA).
+
+    Modes the PNG encoder can't take directly are converted with the
+    caller's own Pillow install; alpha survives, everything else lands
+    in RGB.
+    """
     import numpy as np
-    from PIL import Image
+
+    if img.mode not in ("L", "LA", "RGB", "RGBA"):
+        has_alpha = (
+            img.mode in ("RGBa", "La", "PA")
+            or (img.mode == "P" and "transparency" in img.info)
+        )
+        img = img.convert("RGBA" if has_alpha else "RGB")
+    # np.array copies, so the caller can keep mutating its image.
+    return np.array(img, dtype=np.uint8)
+
+
+def _normalize_array(arr: Any) -> Any:
+    """Normalize a numpy array to owned uint8 pixels for the PNG encoder."""
+    import numpy as np
 
     if arr.ndim == 3 and arr.shape[0] in (1, 3, 4):
         # CHW -> HWC
@@ -115,9 +130,16 @@ def _numpy_to_pil(arr: Any) -> Any:
     if arr.ndim == 3 and arr.shape[2] == 1:
         arr = arr.squeeze(2)
 
+    if (
+        arr.ndim not in (2, 3)
+        or (arr.ndim == 3 and arr.shape[2] not in (2, 3, 4))
+        or arr.size == 0
+    ):
+        raise TypeError(f"Cannot serialize image array of shape {arr.shape}")
+
     # Explicit copy: transposes/squeezes above are views, and the caller
     # may mutate its buffer after nb.log_image returns.
-    return Image.fromarray(np.array(arr, dtype=np.uint8, copy=True))
+    return np.array(arr, dtype=np.uint8, copy=True)
 
 
 def prepare_audio(audio: Any, sr: int = 16000) -> PendingMedia:
@@ -269,20 +291,18 @@ def _encode_bitmask_group(bitmasks_obj: Any) -> dict:
     """Encode a Bitmasks(data=..., color=...) instance to wire form."""
     import base64
     import numpy as np
-    from PIL import Image as _PIL
+
+    from nebo.logging.png import encode_png
 
     masks = []
     for m in _normalize_bitmask(bitmasks_obj.data):
         arr = np.asarray(m)
         # Binarize: any nonzero → 255. Works for bool, uint8, float, etc.
         binary = (arr > 0).astype(np.uint8) * 255
-        img = _PIL.fromarray(binary, mode="L")
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
         masks.append({
             "width": int(binary.shape[1]),
             "height": int(binary.shape[0]),
-            "data": base64.b64encode(buf.getvalue()).decode("ascii"),
+            "data": base64.b64encode(encode_png(binary)).decode("ascii"),
         })
     return {"data": masks, "color": bitmasks_obj.color}
 

@@ -64,10 +64,11 @@ def _remove_pid() -> None:
 
 
 def _is_alive(port: int) -> bool:
+    from urllib.request import urlopen
+
     try:
-        import httpx
-        resp = httpx.get(f"http://localhost:{port}/health", timeout=2.0)
-        return resp.status_code == 200
+        with urlopen(f"http://localhost:{port}/health", timeout=2.0) as resp:
+            return resp.status == 200
     except Exception:
         return False
 

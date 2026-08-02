@@ -121,7 +121,7 @@ Bar/pie/histogram are stepless and stay visible when the filter is active.
 Images
 ------
 
-``nb.log_image(image, name=None, step=None)`` accepts PIL images, NumPy arrays, or PyTorch tensors:
+``nb.log_image(image, name=None, step=None)`` accepts PIL images, NumPy arrays, or PyTorch tensors (Pillow is not a nebo dependency — PIL inputs work whenever Pillow is installed in your own environment):
 
 .. code-block:: python
 

@@ -16,10 +16,8 @@ classifiers = [
 ]
 dependencies = [
     "fastapi>=0.100.0",
-    "httpx>=0.24.0",
     "msgpack>=1.0.0",
     "numpy>=1.23.0",
-    "pillow>=10.0.0",
     "uvicorn>=0.23.0",
     "websockets>=11.0"
 ]
@@ -36,6 +34,10 @@ deploy = ["huggingface_hub>=0.20.0"]
 dev = [
     "pytest>=7.2.0",
     "pytest-asyncio>=0.23.8",
+    # Test-only: PIL decodes/authors images in tests (the package itself
+    # no longer depends on it) and fastapi.testclient requires httpx.
+    "pillow>=10.0.0",
+    "httpx>=0.24.0",
     "sphinxcontrib-applehelp>=1.0.8",
     "sphinxcontrib-devhelp>=1.0.6",
     "sphinxcontrib-htmlhelp>=2.0.5",

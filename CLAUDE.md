@@ -430,7 +430,7 @@ UI invariant: chart components must NOT early-return `null` for empty data while
 
 `Polygons` carries an extra `fill: bool = True` flag (filled interior vs. outline only) which lands as `{data, color, fill}` on the wire. No other label kind has an analogue.
 
-Bitmasks are tinted via CSS `mask-image` + `background-color` + `mask-mode: luminance`. The server emits a single-channel grayscale PNG (PIL mode `"L"`) with no alpha channel; without `mask-mode: luminance` the browser would default to `mask-mode: alpha` and treat every pixel as opaque, flooding the entire image with the group color.
+Bitmasks are tinted via CSS `mask-image` + `background-color` + `mask-mode: luminance`. The SDK emits a single-channel grayscale PNG (color type 0, no alpha channel); without `mask-mode: luminance` the browser would default to `mask-mode: alpha` and treat every pixel as opaque, flooding the entire image with the group color.
 
 Note the kwarg is `bitmasks=` (plural) — matches the dataclass name and parallels the other four kinds.
 
@@ -470,7 +470,7 @@ Smoothed values are rendered, not persisted: raw entries in the store remain unt
 ### Package layout
 
 - `nebo/core/` — decorators, DAG builder, session state, `DaemonClient`, config, tracker, `.nebo` file format, `groups.py` (`validate_group_path` — shared SDK/daemon group-path validation), `refs.py` (`parse_ref`/`format_ref` for canonical `nebo://` references; TS twin at `ui/src/lib/refs.ts` — keep in lockstep).
-- `nebo/logging/` — user-facing `log`/`log_line`/`log_bar`/`log_pie`/`log_scatter`/`log_histogram`/`log_image`/`log_audio`/`md`, plus the serializer/queue that batches events to the daemon.
+- `nebo/logging/` — user-facing `log`/`log_line`/`log_bar`/`log_pie`/`log_scatter`/`log_histogram`/`log_image`/`log_audio`/`md`, plus the serializer/queue that batches events to the daemon, and `png.py` (pure-stdlib numpy+zlib PNG encoder — see the Pillow convention below).
 - `nebo/labels.py` — public dataclasses (`Points`, `Boxes`, `Circles`, `Polygons`, `Bitmasks`) for `nb.log_image` overlays. Re-exported as `nb.labels`.
 - `nebo/server/` — `daemon.py` (FastAPI app, created via `create_daemon_app` factory), `cache.py` (`RunCache` write-behind SQLite cache, `MediaLRU`, `media_id_for`, cache-path/sweep helpers), `watcher.py` (directory watcher with persisted offsets + shallow header-only registration), `tree.py` (`TreeStore` — run-tree groups/placements/docs over `meta/tree.json`), `runner.py` (vestigial subprocess manager), `protocol.py` (`MessageType` enum + `decode_batch`).
 - `nebo/mcp/` — MCP tools (`tools.py`) and stdio/server entry points. Split into observation (graph, text, metrics, description, run summary/history — `nebo_get_text`), alerts (`wait_for_alert`, `list_alerts`, `set_alert`, `delete_alert`), utility (`load_file`), and write (`log_metric/text/image/audio` — `nebo_log_text` entries are `{run_id?, loggable_id?, name?, message, step?}`). Run lifecycle is NOT exposed — pipelines start/stop via the user's shell.
@@ -509,3 +509,4 @@ Plain `pytest` + `pytest-asyncio`. Tests are self-contained and exercise the pub
 - **`@nb.fn(ui={})` keys.** Production code reads `color` and `default_tab`. `default_tab` values are `"info"` / `"text"` / `"metrics"` / `"images"` / `"audio"` (no `"ask"` — that tab was removed along with `nb.ask`; `"logs"` was renamed to `"text"`). Unknown keys are forwarded to the UI verbatim so adding a new hint requires only a UI consumer, no SDK change.
 - **No interactive blocking from the SDK.** `nb.ask` and pauseable nodes are intentionally absent — the SDK is for logging, not orchestration. Don't reintroduce wire-level events that block the running pipeline; if a feature needs that, it belongs outside nebo.
 - **`nb.log_image` only takes `nb.labels.*` instances.** Raw lists/tensors raise a `TypeError`. The kwarg names are `points`, `boxes`, `circles`, `polygons`, `bitmasks` (note plural for the last). Each kwarg accepts one instance or a list of them — don't reintroduce a "single raw geometry" path.
+- **Pillow and httpx are dev-only dependencies — never runtime deps.** PNGs are encoded by `nebo/logging/png.py` (stdlib + numpy); PIL *inputs* to `log_image` still work via a guarded import of the caller's own Pillow (exotic modes convert to RGB/RGBA at `prepare_image` time). All daemon-bound HTTP is stdlib (`urllib`/`http.client`); httpx exists only because `fastapi.testclient` needs it. `tests/test_png.py` + `tests/conftest.py:blocked_import` enforce both.
