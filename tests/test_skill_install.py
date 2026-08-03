@@ -110,9 +110,37 @@ class TestAgentsMdInstall:
         assert "<!-- nebo-skill:instrumentation start -->" in body
 
 
+class TestCodexInstall:
+    """Codex CLI adopted the SKILL.md standard: skills are discovered in
+    any directory under ~/.codex/skills (or .codex/skills per-project)."""
+
+    def test_user_level_install_writes_prefixed_skill_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("NEBO_CODEX_HOME", str(tmp_path))
+        written = skill_install.install_codex(skill="runs-qa")
+        target = tmp_path / "skills" / "nebo-runs-qa" / "SKILL.md"
+        assert written == [target]
+        assert target.read_text().startswith("---")
+
+    def test_default_installs_every_skill(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("NEBO_CODEX_HOME", str(tmp_path))
+        written = skill_install.install_codex()
+        assert {p.parent.name for p in written} == {
+            "nebo-runs-qa", "nebo-instrumentation",
+        }
+
+    def test_project_level_install_uses_cwd(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        skill_install.install_codex(skill="runs-qa", project=True)
+        assert (tmp_path / ".codex" / "skills" / "nebo-runs-qa" / "SKILL.md").exists()
+
+    def test_platform_registered(self):
+        assert "codex" in skill_install.PLATFORMS
+
+
 class TestInstallDispatcher:
     def test_install_all_platforms(self, tmp_path, monkeypatch):
         monkeypatch.setenv("NEBO_CLAUDE_HOME", str(tmp_path / "claude"))
+        monkeypatch.setenv("NEBO_CODEX_HOME", str(tmp_path / "codex"))
         monkeypatch.setenv("NEBO_AGENTS_MD_DIR", str(tmp_path / "project"))
         os.makedirs(tmp_path / "project", exist_ok=True)
         results = skill_install.install(
@@ -122,6 +150,8 @@ class TestInstallDispatcher:
         assert set(results) == set(skill_install.PLATFORMS)
         cc_path = tmp_path / "claude" / "skills" / "nebo-runs-qa" / "SKILL.md"
         assert cc_path.exists()
+        codex_path = tmp_path / "codex" / "skills" / "nebo-runs-qa" / "SKILL.md"
+        assert codex_path.exists()
         agents_path = tmp_path / "project" / "AGENTS.md"
         assert agents_path.exists()
 

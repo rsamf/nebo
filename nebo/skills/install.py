@@ -1,12 +1,18 @@
 """Install nebo skills into agent-platform-specific locations.
 
-Two platforms are supported:
+Three platforms are supported:
 
 - ``claude-code``: copies ``SKILL.md`` to ``~/.claude/skills/nebo-<name>/SKILL.md``
   (user-level, the default) or ``.claude/skills/nebo-<name>/SKILL.md`` under
   the current directory (project-level, ``--project``). The ``nebo-`` prefix
   on the directory keeps these visually grouped and distinguishable from
   other skills installed in the same tree.
+
+- ``codex``: same layout under Codex CLI's skills tree —
+  ``~/.codex/skills/nebo-<name>/SKILL.md`` (user-level) or
+  ``.codex/skills/…`` (``--project``). Codex discovers any directory in
+  that tree containing a ``SKILL.md``, and its frontmatter (name +
+  description) is the same format nebo skills already carry.
 
 - ``agents-md``: upserts the skill content into ``AGENTS.md`` in the current
   directory. A pair of HTML markers (``<!-- nebo-skill:<name> start -->`` …
@@ -24,11 +30,12 @@ from typing import Iterable
 from . import available_skills, read_skill
 
 
-PLATFORMS = ("claude-code", "agents-md")
+PLATFORMS = ("claude-code", "codex", "agents-md")
 
 
-# Allow tests / power users to override the default Claude home.
+# Allow tests / power users to override the default platform homes.
 _CLAUDE_HOME_ENV = "NEBO_CLAUDE_HOME"
+_CODEX_HOME_ENV = "NEBO_CODEX_HOME"
 _AGENTS_MD_ENV = "NEBO_AGENTS_MD_DIR"
 
 
@@ -43,17 +50,19 @@ def _resolve_skills(skill: str | None) -> list[str]:
     return [skill]
 
 
-def _claude_skills_dir(project: bool) -> Path:
-    """Resolve the Claude Code skills directory.
+def _platform_skills_dir(project: bool, dot_dir: str, home_env: str) -> Path:
+    """Resolve a skills-tree platform's target directory.
 
-    ``NEBO_CLAUDE_HOME`` overrides ``~/.claude`` for tests.
+    ``project=True`` → ``<cwd>/<dot_dir>/skills``; otherwise
+    ``~/<dot_dir>/skills``, with ``home_env`` overriding the home for
+    tests (its value replaces the ``~/<dot_dir>`` part).
     """
     if project:
-        return Path.cwd() / ".claude" / "skills"
-    home = os.environ.get(_CLAUDE_HOME_ENV)
+        return Path.cwd() / dot_dir / "skills"
+    home = os.environ.get(home_env)
     if home:
         return Path(home) / "skills"
-    return Path.home() / ".claude" / "skills"
+    return Path.home() / dot_dir / "skills"
 
 
 def _agents_md_path() -> Path:
@@ -75,13 +84,13 @@ def _claude_dirname(name: str) -> str:
     return name if name.startswith("nebo-") else f"nebo-{name}"
 
 
-def install_claude_code(skill: str | None = None, project: bool = False) -> list[Path]:
-    """Install one or more skills into the Claude Code skills directory.
+def _install_skill_tree(base: Path, skill: str | None) -> list[Path]:
+    """Write skills into a ``<base>/nebo-<name>/SKILL.md`` tree.
 
-    Each skill lands at ``<base>/nebo-<name>/SKILL.md`` so it's clearly a
-    nebo-shipped skill at a glance. Returns the list of written file paths.
+    Shared by the claude-code and codex platforms — both discover any
+    directory containing a ``SKILL.md`` under their skills root.
+    Returns the list of written file paths.
     """
-    base = _claude_skills_dir(project)
     base.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for name in _resolve_skills(skill):
@@ -91,6 +100,20 @@ def install_claude_code(skill: str | None = None, project: bool = False) -> list
         target.write_text(read_skill(name), encoding="utf-8")
         written.append(target)
     return written
+
+
+def install_claude_code(skill: str | None = None, project: bool = False) -> list[Path]:
+    """Install one or more skills into the Claude Code skills directory."""
+    return _install_skill_tree(
+        _platform_skills_dir(project, ".claude", _CLAUDE_HOME_ENV), skill,
+    )
+
+
+def install_codex(skill: str | None = None, project: bool = False) -> list[Path]:
+    """Install one or more skills into the Codex CLI skills directory."""
+    return _install_skill_tree(
+        _platform_skills_dir(project, ".codex", _CODEX_HOME_ENV), skill,
+    )
 
 
 def install_agents_md(skill: str | None = None) -> Path:
@@ -137,6 +160,8 @@ def install(
     for platform in platforms:
         if platform == "claude-code":
             results[platform] = install_claude_code(skill=skill, project=project)
+        elif platform == "codex":
+            results[platform] = install_codex(skill=skill, project=project)
         elif platform == "agents-md":
             results[platform] = install_agents_md(skill=skill)
         else:

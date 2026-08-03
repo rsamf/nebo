@@ -271,6 +271,61 @@ Initialization
         You rarely need to call ``init()`` explicitly. The SDK auto-initializes on the first ``@fn`` execution or ``nb.log*`` call. Set ``NEBO_URI`` and ``NEBO_API_TOKEN`` in the environment so the same code works in file mode locally and against a remote daemon without a change.
 
 
+Run Lifecycle
+-------------
+
+.. function:: nb.start_run(name: str | None = None, config: dict | None = None, run_id: str | None = None, group: str | None = None) -> _RunContext
+
+    Start a new run, or resume one started earlier in the same process.
+    Works as a context manager (the run completes when the block exits)
+    or as a plain call (the run stays open until the next ``start_run``
+    or process exit):
+
+    .. code-block:: python
+
+        with nb.start_run(name="lr=3e-4", config={"lr": 3e-4}):
+            train()
+
+        run = nb.start_run(name="eval")   # plain call
+        evaluate()
+
+    If a run is already live when ``start_run`` is called, it is closed
+    cleanly (its file ends with a completion marker) and its in-memory
+    state is snapshotted under its run_id — so one process can open many
+    runs back to back, and later resume any of them.
+
+    :param name: Display name for the run, shown in the UI and run listings
+        in place of the script basename.
+    :param config: Run-level config dict (plain dict or OmegaConf
+        ``DictConfig``), shown in the UI's Config panel. This is the
+        run-scoped counterpart of ``nb.log_cfg`` (which attaches config to
+        the current ``@fn`` node).
+    :param run_id: Resume the run with this id. Only run_ids from the
+        same process can be resumed — the SDK restores the run's saved
+        in-memory state (metric cursors, DAG bookkeeping) and subsequent
+        events append to the same run. When omitted, a fresh run_id is
+        generated.
+    :param group: Run-tree group path for this run (e.g.
+        ``"vision/detr/lr-sweep"``). Overrides ``nb.init(group=)``;
+        ``NEBO_GROUP`` overrides both.
+    :returns: A ``_RunContext`` handle with a ``.run_id`` attribute, usable
+        as a context manager.
+    :raises ValueError: If *group* is not a valid group path.
+
+    .. note::
+
+        Declarative script-level metadata (``nb.md()`` / ``nb.ui()`` called
+        outside a live run) is applied to every **new** run ``start_run``
+        opens — but not on ``run_id=`` resume, which would duplicate it.
+
+    .. note::
+
+        Without any ``start_run``, a script is simply one implicit run,
+        materialized on the first logged event. Calling ``start_run``
+        before anything has been logged names that run rather than opening
+        a second one.
+
+
 Notebook Embedding
 ------------------
 
@@ -311,6 +366,7 @@ URL                               Renders
 ================================  ====================================
 ``?run=X``                        Full run dashboard (DAG + timeline)
 ``?run=X&dag``                    DAG only
+``?run=X&flat``                   Flat card grid (desktop flat view)
 ``?run=X&node=Y``                 Single node detail
 ``?run=X&text``                   Text panel
 ``?run=X&text=status``            Single named text stream

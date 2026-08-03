@@ -859,3 +859,47 @@ class TestMediaCli:
     def test_no_top_level_media_command(self):
         code, _err = _run_cli_with_stderr(["media", "get", "m1", "--run", "r1"])
         assert code == 2  # argparse: unknown command
+
+
+class TestSkillsCli:
+    """`nebo skills install` installs every skill by default; installing
+    a subset is explicit via positional names."""
+
+    def test_install_default_installs_all(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("NEBO_CLAUDE_HOME", str(tmp_path))
+        out = _run_cli(["skills", "install"])
+        assert (tmp_path / "skills" / "nebo-runs-qa" / "SKILL.md").exists()
+        assert (tmp_path / "skills" / "nebo-instrumentation" / "SKILL.md").exists()
+        assert "wrote" in out
+
+    def test_install_single_skill_is_explicit(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("NEBO_CLAUDE_HOME", str(tmp_path))
+        _run_cli(["skills", "install", "runs-qa"])
+        assert (tmp_path / "skills" / "nebo-runs-qa" / "SKILL.md").exists()
+        assert not (tmp_path / "skills" / "nebo-instrumentation").exists()
+
+    def test_install_several_named_skills(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("NEBO_CLAUDE_HOME", str(tmp_path))
+        _run_cli(["skills", "install", "runs-qa", "instrumentation"])
+        assert (tmp_path / "skills" / "nebo-runs-qa" / "SKILL.md").exists()
+        assert (tmp_path / "skills" / "nebo-instrumentation" / "SKILL.md").exists()
+
+    def test_install_unknown_skill_errors(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("NEBO_CLAUDE_HOME", str(tmp_path))
+        code, err = _run_cli_with_stderr(["skills", "install", "nope"])
+        assert code == 2
+        assert "runs-qa" in err  # error names the available skills
+
+    def test_list_shows_available_skills(self):
+        out = _run_cli(["skills", "list"])
+        assert "runs-qa" in out and "instrumentation" in out
+
+    def test_install_platform_codex(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("NEBO_CODEX_HOME", str(tmp_path))
+        _run_cli(["skills", "install", "--platform", "codex"])
+        assert (tmp_path / "skills" / "nebo-runs-qa" / "SKILL.md").exists()
+        assert (tmp_path / "skills" / "nebo-instrumentation" / "SKILL.md").exists()
+
+    def test_singular_skill_command_removed(self):
+        code, _err = _run_cli_with_stderr(["skill", "list"])
+        assert code == 2

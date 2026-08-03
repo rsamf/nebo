@@ -48,7 +48,18 @@ Install all of the skills onto Claude Code.
 
 .. code-block:: bash
 
-    nebo skill install --platform claude-code --skill all
+    nebo skills install
+
+Codex
+-----
+
+Install all of the skills onto Codex CLI (they land in
+``~/.codex/skills``, where Codex auto-discovers them; add ``--project``
+for ``.codex/skills`` in the current repo).
+
+.. code-block:: bash
+
+    nebo skills install --platform codex
 
 Other platforms
 ---------------
@@ -57,7 +68,7 @@ Install all of the skills the cross-platform way.
 
 .. code-block:: bash
 
-    nebo skill install --platform agents-md --skill all
+    nebo skills install --platform agents-md
 
 Quick Start
 ===========

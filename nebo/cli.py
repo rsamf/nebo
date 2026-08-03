@@ -546,13 +546,13 @@ def cmd_load(args: argparse.Namespace) -> None:
     print(f"Loaded: {filepath}")
 
 
-def cmd_skill(args: argparse.Namespace) -> None:
+def cmd_skills(args: argparse.Namespace) -> None:
     """List or install nebo-shipped agent skills."""
     # Imported lazily so `nebo --help` doesn't pay the cost.
     from nebo import skills
     from nebo.skills import install as skill_install
 
-    action = getattr(args, "skill_action", None)
+    action = getattr(args, "skills_action", None)
 
     if action == "list" or action is None:
         for name in skills.available_skills():
@@ -574,7 +574,7 @@ def cmd_skill(args: argparse.Namespace) -> None:
 
     if action == "install":
         platform = getattr(args, "platform", "claude-code") or "claude-code"
-        skill = getattr(args, "skill", None) or "runs-qa"
+        names = list(getattr(args, "names", []) or [])
         project = bool(getattr(args, "project", False))
 
         if platform == "all":
@@ -582,25 +582,29 @@ def cmd_skill(args: argparse.Namespace) -> None:
         else:
             platforms = [platform]
 
+        # No names → install every shipped skill (skill=None). Explicit
+        # names install exactly those.
+        merged: dict[str, list] = {}
         try:
-            results = skill_install.install(
-                platforms=platforms,
-                skill=None if skill == "all" else skill,
-                project=project,
-            )
+            for target in names or [None]:
+                results = skill_install.install(
+                    platforms=platforms, skill=target, project=project,
+                )
+                for platform_name, paths in results.items():
+                    bucket = merged.setdefault(platform_name, [])
+                    for p in paths if isinstance(paths, list) else [paths]:
+                        if p not in bucket:  # agents-md yields one path per pass
+                            bucket.append(p)
         except (ValueError, FileNotFoundError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             sys.exit(2)
 
-        for platform_name, paths in results.items():
-            if isinstance(paths, list):
-                for p in paths:
-                    print(f"{platform_name}: wrote {p}")
-            else:
-                print(f"{platform_name}: wrote {paths}")
+        for platform_name, paths in merged.items():
+            for p in paths:
+                print(f"{platform_name}: wrote {p}")
         return
 
-    print(f"unknown skill action: {action!r}", file=sys.stderr)
+    print(f"unknown skills action: {action!r}", file=sys.stderr)
     sys.exit(2)
 
 
@@ -1295,27 +1299,26 @@ def main() -> None:
     p_mcp_stdio = subparsers.add_parser("mcp-stdio", help="Run MCP stdio transport")
     p_mcp_stdio.add_argument("--port", type=int, default=7861)
 
-    # skill
-    p_skill = subparsers.add_parser(
-        "skill", help="List or install nebo-shipped agent skills",
+    # skills
+    p_skills = subparsers.add_parser(
+        "skills", help="List or install nebo-shipped agent skills",
     )
-    skill_subparsers = p_skill.add_subparsers(dest="skill_action")
-    skill_subparsers.add_parser("list", help="List available skills")
-    p_skill_install = skill_subparsers.add_parser(
-        "install", help="Install a skill onto an agent platform",
+    skills_subparsers = p_skills.add_subparsers(dest="skills_action")
+    skills_subparsers.add_parser("list", help="List available skills")
+    p_skills_install = skills_subparsers.add_parser(
+        "install", help="Install agent skills (all of them by default)",
     )
-    p_skill_install.add_argument(
+    p_skills_install.add_argument(
+        "names", nargs="*", metavar="SKILL",
+        help="Skills to install (default: all of them). `nebo skills list` shows options.",
+    )
+    p_skills_install.add_argument(
         "--platform",
-        choices=["claude-code", "agents-md", "all"],
+        choices=["claude-code", "codex", "agents-md", "all"],
         default="claude-code",
         help="Target platform (default: claude-code)",
     )
-    p_skill_install.add_argument(
-        "--skill",
-        default="runs-qa",
-        help="Skill name (or 'all'). Default: runs-qa. Run `nebo skill list` to see options.",
-    )
-    p_skill_install.add_argument(
+    p_skills_install.add_argument(
         "--project",
         action="store_true",
         help="For claude-code: install under ./.claude/skills instead of ~/.claude/skills",
@@ -1542,7 +1545,7 @@ def main() -> None:
         "load": cmd_load,
         "mcp": cmd_mcp,
         "mcp-stdio": cmd_mcp_stdio,
-        "skill": cmd_skill,
+        "skills": cmd_skills,
         "deploy": _lazy_deploy,
         "runs": cmd_runs,
         "tree": cmd_tree,

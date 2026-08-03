@@ -43,14 +43,16 @@ html_theme_options = {
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-html_title = 'Nebo — AI-native observability for Python'
+html_title = 'Nebo - A modern experiment tracking library for ML'
 html_permalinks_icon = Icons.permalinks_icon
 html_theme = 'sphinxawesome_theme'
+html_logo = '_static/logo.png'
+html_favicon = '_static/logo.png'
 html_static_path = ['_static']
 html_extra_path = ["robots.txt"]
 sitemap_url_scheme = "{link}"
 html_context = {
-    'og_description': 'Nebo is an AI-native observability SDK for Python pipelines and agentic workflows. Decorate functions and classes, log metrics and media, visualize DAGs, and query runs with AI.'
+    'og_description': 'Nebo is a modern multi-modal logger for ML experiments and data pipelines, built for humans and AI agents. View remotely with a mobile-first UI, track experiments with a local-first and free logging SDK, and run autonomous experiments with AI agents.'
 }
 
 pygments_style = "default"

@@ -565,6 +565,60 @@ daemon can't see your filesystem:
 you don't have to repeat the flags.
 
 
+Multiple Runs in One Process
+============================
+
+By default a script *is* a run: the first logged event materializes it,
+and it ends when the process exits. Nothing needs to be declared.
+
+When one process should produce several runs — a hyperparameter sweep,
+a train-then-eval script, a long-lived worker — draw the boundaries
+explicitly with ``nb.start_run()``:
+
+.. code-block:: python
+
+    for lr in (1e-3, 3e-4, 1e-4):
+        with nb.start_run(name=f"lr={lr}", config={"lr": lr}):
+            train(lr)   # each iteration is its own run, file, and DAG
+
+Each ``with`` block is a separate run with its own ``.nebo`` file; the
+``name`` replaces the script basename in the UI, and ``config`` becomes
+the run's Config panel (the run-scoped counterpart of ``nb.log_cfg``,
+which attaches config to the current function node).
+
+``start_run`` also works as a plain call when a context manager is
+awkward — the run stays open until the next ``start_run`` or process
+exit:
+
+.. code-block:: python
+
+    run = nb.start_run(name="ingest")
+    process_batch()
+    print(run.run_id)   # handle exposes the id
+
+Starting a new run closes the previous one cleanly and snapshots its
+in-memory state under its run_id, so a run can be **resumed** later in
+the same process — metric steps continue where they left off and events
+append to the same run:
+
+.. code-block:: python
+
+    first = nb.start_run(name="train")
+    nb.log_line("loss", 0.9)            # step 0
+
+    with nb.start_run(name="side-experiment"):
+        nb.log_line("loss", 0.5)
+
+    with nb.start_run(run_id=first.run_id):   # resume
+        nb.log_line("loss", 0.7)        # step 1, same run as before
+
+Resume is in-process only — a run_id from a previous process can't be
+resumed. Script-level ``nb.md()`` / ``nb.ui()`` templates (see
+`Workflow Description`_) apply to every *new* run ``start_run`` opens,
+but not on resume. The ``group=`` parameter places the run in the run
+tree, covered next.
+
+
 Organizing Runs into Groups
 ===========================
 

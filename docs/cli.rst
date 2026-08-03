@@ -256,10 +256,10 @@ invokes.
 
     Daemon port to embed in the MCP config (default: ``7861``).
 
-nebo skill
-==========
+nebo skills
+===========
 
-.. program:: nebo skill
+.. program:: nebo skills
 
 List or install the agent skills that ship with nebo (e.g. ``runs-qa``
 for run Q&A and derived metrics, and the instrumentation skill for
@@ -267,20 +267,21 @@ writing nebo-integrated code).
 
 .. code-block:: bash
 
-    nebo skill list
-    nebo skill install --skill all --platform claude-code
+    nebo skills list
+    nebo skills install            # all skills (the default)
+    nebo skills install runs-qa    # a subset, named explicitly
 
 .. option:: list
 
     List available skills.
 
-.. option:: install [--platform <p>] [--skill <name>] [--project]
+.. option:: install [SKILL ...] [--platform <p>] [--project]
 
-    Install a skill onto an agent platform.
+    Install agent skills. With no names, **all** shipped skills are
+    installed; name one or more to install just those.
 
-    * ``--platform`` — ``claude-code`` (default), ``agents-md``, or
-      ``all``.
-    * ``--skill`` — skill name or ``all`` (default: ``runs-qa``).
+    * ``--platform`` — ``claude-code`` (default), ``codex``,
+      ``agents-md``, or ``all``.
     * ``--project`` — for claude-code, install under
       ``./.claude/skills`` instead of ``~/.claude/skills``.
 
