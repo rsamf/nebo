@@ -369,16 +369,21 @@ function ImageFeedCard({
       ) : (
         <div className="no-scrollbar flex gap-2 overflow-x-auto">
           {visible.map((e, i) => (
+            // Fixed row height, natural width: label overlays align only
+            // when the img box keeps the image's intrinsic aspect ratio,
+            // so the old square object-cover crop is out.
             <button
               key={mediaEntryKey(e, i)}
               onClick={() => setLightbox(e)}
-              className="relative h-24 w-24 shrink-0 overflow-hidden rounded-lg border border-border"
+              className="relative h-24 shrink-0 overflow-hidden rounded-lg border border-border"
             >
-              <img
+              <ImageWithLabels
                 src={api.mediaUrl(runId, e.mediaId)}
+                labels={e.labels}
+                loggableName={loggableId}
+                imageName={e.name ?? ''}
                 alt={e.name}
-                loading="lazy"
-                className="h-full w-full object-cover"
+                imgClassName="block h-24 w-auto max-w-none"
               />
               {e.step != null && (
                 <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1 font-mono text-[9px] text-white">
@@ -454,9 +459,12 @@ function AudioFeedCard({
 function TextFeedCard({ name, entries, nodeLabel }: { name: string; entries: TextEntry[]; nodeLabel: string }) {
   const timelineFilter = useTimelineFilter()
 
+  // The card renders at natural height inside the (scrolling) feed — no
+  // inner scroller, so the tail is kept short. The node sheet has the
+  // full stream.
   const visible = useMemo(() => {
     const filtered = timelineFilter ? entries.filter(e => timelineFilter.matchEntry(e)) : entries
-    return filtered.slice(-100)
+    return filtered.slice(-30)
   }, [entries, timelineFilter])
 
   return (
@@ -465,7 +473,7 @@ function TextFeedCard({ name, entries, nodeLabel }: { name: string; entries: Tex
         <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{name}</span>
         <span className="shrink-0 text-[11px] text-muted-foreground">{nodeLabel} · tail</span>
       </div>
-      <div className="no-scrollbar max-h-40 overflow-y-auto font-mono">
+      <div className="font-mono">
         {visible.length === 0 && (
           <div className="py-1 text-[11px] text-muted-foreground">No entries in current range</div>
         )}

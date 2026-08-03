@@ -149,13 +149,13 @@ export function LoggableTabContainer({ runId, loggableId, fillParent = false }: 
         (NodeText / NodeImages / NodeMetrics / NodeAudio all switch to
         `h-full overflow-auto` when fillParent is set), so we drop the
         wrapper's overflow to avoid nested scrollbars. Default mode
-        keeps the legacy max-h cap with overflow on the wrapper.
+        (embedded views) takes its natural height and lets the page
+        scroller own overflow — the old `max-h-[420px] overflow-auto`
+        cap here stacked a third same-axis scrollbar between the page
+        and the tab bodies' own caps.
       */}
       <div
-        className={cn(
-          'p-3',
-          fillParent ? 'flex-1 min-h-0' : 'max-h-[420px] overflow-auto',
-        )}
+        className={cn('p-3', fillParent && 'flex-1 min-h-0')}
         onClick={e => e.stopPropagation()}
       >
         <LoggableTabContent runId={runId} loggableId={loggableId} tab={resolvedTab} comparisonRunIds={isComparison ? comparisonRunIds : undefined} fillParent={fillParent} />

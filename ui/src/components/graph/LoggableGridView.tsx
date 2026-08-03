@@ -1,13 +1,14 @@
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'motion/react'
 import { useStore, type ImageEntry, type AudioEntry } from '@/store'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 import { Search } from 'lucide-react'
-import { MetricBlock } from '@/components/node-tabs/NodeMetrics'
-import { VirtualizedImageList } from '@/components/node-tabs/NodeImages'
-import { AudioItem } from '@/components/node-tabs/NodeAudio'
-import { TextBlock } from '@/components/node-tabs/NodeText'
+import { MetricBlock, ComparisonMetricBlock } from '@/components/node-tabs/NodeMetrics'
+import { VirtualizedImageList, ComparisonImageCell } from '@/components/node-tabs/NodeImages'
+import { AudioItem, ComparisonAudioCell } from '@/components/node-tabs/NodeAudio'
+import { TextBlock, ComparisonTextCell } from '@/components/node-tabs/NodeText'
+import { ComparisonGrid } from '@/components/shared/ComparisonGrid'
 import { topologicalSort } from '@/lib/graph'
 import { DEFAULT_RUN_COLOR } from '@/lib/colors'
 import { useTimelineFilter } from '@/hooks/useTimelineFilter'
@@ -18,6 +19,11 @@ import type { LoggableMetricSeries, TextEntry } from '@/lib/api'
 
 interface LoggableGridViewProps {
   runId: string
+  // When set, the grid renders comparison cards: the union of loggables and
+  // stream/metric names across the runs, with one comparison chart or
+  // split-panel grid per card. `runId` stays the anchor (first) run used
+  // for context-menu iframe URLs.
+  comparisonRunIds?: string[]
 }
 
 // ─── Card chrome ─────────────────────────────────────────────────────────────
@@ -28,17 +34,13 @@ interface CardShellProps {
 }
 
 // Cards in the grid lock to a uniform height so the tile field stays
-// even regardless of how much data each loggable carries. Bodies that
-// can outgrow this height (long log feeds, dense metric histories,
-// stacks of images/audio) scroll inside the card; per-block Expand
+// even regardless of how much data each loggable carries. The body is a
+// clipping box, NOT a scroller: each card body component owns exactly one
+// full-height scroll container (the virtualized text/image list, the audio
+// stack) so a card never nests same-axis scrollbars. Per-block Expand
 // buttons inside metric/image headers give the user a larger viewport
 // when they need it.
 const CARD_HEIGHT_PX = 360
-const CARD_HEADER_PX = 36              // matches `px-3 py-2` + text-sm line height
-const CARD_BODY_PADDING_PX = 12 * 2    // p-3 top + bottom
-// What the inner content can occupy after chrome. Used by content
-// components that need an explicit pixel cap (e.g., VirtualizedImageList).
-const CARD_INNER_HEIGHT_PX = CARD_HEIGHT_PX - CARD_HEADER_PX - CARD_BODY_PADDING_PX
 
 const CardShell = memo(function CardShell({ title, children }: CardShellProps) {
   return (
@@ -49,7 +51,7 @@ const CardShell = memo(function CardShell({ title, children }: CardShellProps) {
       <div className="flex items-start gap-2 px-3 py-2 border-b border-border shrink-0">
         <span className="flex-1 min-w-0 text-sm font-medium truncate">{title}</span>
       </div>
-      <div className="p-3 min-w-0 flex-1 min-h-0 overflow-auto">{children}</div>
+      <div className="p-3 min-w-0 flex-1 min-h-0 overflow-hidden">{children}</div>
     </div>
   )
 })
@@ -137,13 +139,13 @@ function ImageCardBody({
     return out
   }, [entries, timelineFilter])
   if (visible.length === 0) return <EmptyForRange />
+  // No pixel cap: the list fills the card body (the card's single scroller).
   return (
     <VirtualizedImageList
       runId={runId}
       loggableId={loggableId}
       images={visible}
       showTimestamp
-      maxHeight={CARD_INNER_HEIGHT_PX}
     />
   )
 }
@@ -155,11 +157,14 @@ function AudioCardBody({ runId, entries }: { runId: string; entries: AudioEntry[
     return out
   }, [entries, timelineFilter])
   if (visible.length === 0) return <EmptyForRange />
+  // The card body clips; this list is the card's single scroller.
   return (
-    <div className="space-y-3">
-      {visible.map(entry => (
-        <AudioItem key={entry.mediaId} runId={runId} entry={entry} showTimestamp />
-      ))}
+    <div className="h-full overflow-auto">
+      <div className="space-y-3">
+        {visible.map(entry => (
+          <AudioItem key={entry.mediaId} runId={runId} entry={entry} showTimestamp />
+        ))}
+      </div>
     </div>
   )
 }
@@ -242,7 +247,14 @@ function resolveNavTarget(
 
 // ─── Main view ───────────────────────────────────────────────────────────────
 
-export function LoggableGridView({ runId }: LoggableGridViewProps) {
+export function LoggableGridView({ runId, comparisonRunIds }: LoggableGridViewProps) {
+  if (comparisonRunIds && comparisonRunIds.length > 0) {
+    return <ComparisonGridCards runIds={comparisonRunIds} />
+  }
+  return <SingleRunGridCards runId={runId} />
+}
+
+function SingleRunGridCards({ runId }: { runId: string }) {
   const graph = useStore(s => s.runs.get(runId)?.graph)
 
   // Subscribe to raw slices only; derive groupings via useMemo.
@@ -254,14 +266,6 @@ export function LoggableGridView({ runId }: LoggableGridViewProps) {
   const allMetrics = allMetricsRaw ?? EMPTY_LOGGABLE_METRICS
   const allImages = allImagesRaw ?? EMPTY_LOGGABLE_IMAGES
   const allAudio = allAudioRaw ?? EMPTY_LOGGABLE_AUDIO
-
-  const [activeTab, setActiveTab] = useState<TabKey>('metrics')
-  const [activeSectionId, setActiveSectionId] = useState<string | null>(null)
-  const [search, setSearch] = useState('')
-  // Card flashed after a nebo:// deep link lands on it.
-  const [highlightedCardId, setHighlightedCardId] = useState<string | null>(null)
-  const pendingNavTarget = useStore(s => s.pendingNavTarget)
-  const setPendingNavTarget = useStore(s => s.setPendingNavTarget)
 
   // Section list: Global + Agent first, then function nodes in topo order.
   const sectionDescriptors = useMemo(() => {
@@ -404,6 +408,234 @@ export function LoggableGridView({ runId }: LoggableGridViewProps) {
     return { text, metrics, images, audio }
   }, [runId, sectionDescriptors, textsBySection, allMetrics, allImages, allAudio])
 
+  return <GridShell runId={runId} tabs={tabs} loading={!graph} />
+}
+
+// ─── Comparison cards ───────────────────────────────────────────────────────
+
+/**
+ * Comparison-mode card grid: same shell, but each card compares the runs —
+ * metric cards render the shared comparison chart block (with the run-chip
+ * row), text/image/audio cards render the split-panel ComparisonGrid with
+ * one cell per run.
+ */
+function ComparisonGridCards({ runIds }: { runIds: string[] }) {
+  const runs = useStore(s => s.runs)
+  const runColors = useStore(s => s.runColors)
+  const getOrAssignRunColor = useStore(s => s.getOrAssignRunColor)
+
+  useEffect(() => {
+    for (const rid of runIds) getOrAssignRunColor(rid)
+  }, [runIds, getOrAssignRunColor])
+
+  // Run chips on metric cards share one active set across the whole grid
+  // (same semantics as ComparisonMetrics in the node tab). Only *newly
+  // appearing* runs get auto-added, so a WS update can't resurrect a run
+  // the user deselected.
+  const [activeRuns, setActiveRuns] = useState<Set<string>>(() => new Set(runIds))
+  const seenRuns = useRef<Set<string>>(new Set(runIds))
+  useEffect(() => {
+    const fresh = runIds.filter(rid => !seenRuns.current.has(rid))
+    if (fresh.length === 0) return
+    for (const rid of fresh) seenRuns.current.add(rid)
+    setActiveRuns(prev => {
+      const next = new Set(prev)
+      for (const rid of fresh) next.add(rid)
+      return next
+    })
+  }, [runIds])
+
+  const anchorRunId = runIds[0]
+
+  const runNameFor = useCallback(
+    (rid: string) =>
+      runs.get(rid)?.summary.run_name ||
+      runs.get(rid)?.summary.script_path.split('/').pop() ||
+      rid,
+    [runs],
+  )
+
+  // Union of sections across the compared runs: Global + Agent, then each
+  // run's function nodes in that run's topo order, first-seen wins.
+  const sectionDescriptors = useMemo(() => {
+    const sections: { sectionId: string; label: string }[] = [
+      { sectionId: '__global__', label: 'Global' },
+      { sectionId: '__agent__', label: 'Agent' },
+    ]
+    const seen = new Set(sections.map(s => s.sectionId))
+    for (const rid of runIds) {
+      const graph = runs.get(rid)?.graph
+      if (!graph) continue
+      for (const id of topologicalSort(Object.keys(graph.nodes), graph.edges)) {
+        if (seen.has(id)) continue
+        seen.add(id)
+        sections.push({ sectionId: id, label: graph.nodes[id]?.func_name ?? id })
+      }
+    }
+    return sections
+  }, [runs, runIds])
+
+  const effectiveRunIds = useMemo(
+    () => runIds.filter(rid => activeRuns.has(rid)),
+    [runIds, activeRuns],
+  )
+
+  const tabs = useMemo<Record<TabKey, SectionSpec[]>>(() => {
+    const text: SectionSpec[] = []
+    const metrics: SectionSpec[] = []
+    const images: SectionSpec[] = []
+    const audio: SectionSpec[] = []
+
+    for (const { sectionId, label } of sectionDescriptors) {
+      // Card names are unioned across runs so a stream that exists in only
+      // one compared run still gets a card (the other runs' cells show
+      // their empty state).
+      const textNames: string[] = []
+      const textSeen = new Set<string>()
+      const metricTypes = new Map<string, string>()
+      const imageNames: string[] = []
+      const imageSeen = new Set<string>()
+      const audioNames: string[] = []
+      const audioSeen = new Set<string>()
+      for (const rid of runIds) {
+        const run = runs.get(rid)
+        if (!run) continue
+        for (const t of run.texts) {
+          if (t.node !== sectionId || textSeen.has(t.name)) continue
+          textSeen.add(t.name)
+          textNames.push(t.name)
+        }
+        for (const [name, series] of Object.entries(run.loggableMetrics[sectionId] ?? {})) {
+          if (!metricTypes.has(name)) metricTypes.set(name, series.type)
+        }
+        for (const img of run.loggableImages[sectionId] ?? []) {
+          if (imageSeen.has(img.name)) continue
+          imageSeen.add(img.name)
+          imageNames.push(img.name)
+        }
+        for (const a of run.loggableAudio[sectionId] ?? []) {
+          if (audioSeen.has(a.name)) continue
+          audioSeen.add(a.name)
+          audioNames.push(a.name)
+        }
+      }
+
+      if (textNames.length > 0) {
+        text.push({
+          sectionId,
+          label,
+          cards: textNames.map(name => ({
+            cardId: `text:${sectionId}:${name}`,
+            title: `${label} > ${name}`,
+            render: () => (
+              <ComparisonGrid runIds={runIds} fillParent>
+                {(cellRunId) => (
+                  <ComparisonTextCell runId={cellRunId} loggableId={sectionId} name={name} fillParent />
+                )}
+              </ComparisonGrid>
+            ),
+            kind: 'text' as const,
+            loggableId: sectionId,
+            name,
+          })),
+        })
+      }
+
+      if (metricTypes.size > 0) {
+        metrics.push({
+          sectionId,
+          label,
+          cards: [...metricTypes.entries()].map(([name, type]) => ({
+            cardId: `metric:${sectionId}:${name}`,
+            title: `${label} > ${name}`,
+            // The block renders at natural height (chips + chart), so it
+            // gets the card's single scroller around it.
+            render: () => (
+              <div className="h-full overflow-auto">
+                <ComparisonMetricBlock
+                  name={name}
+                  type={type}
+                  loggableId={sectionId}
+                  runIds={effectiveRunIds}
+                  comparisonRunIds={runIds}
+                  activeRuns={activeRuns}
+                  setActiveRuns={setActiveRuns}
+                  runColors={runColors}
+                  runNameFor={runNameFor}
+                />
+              </div>
+            ),
+            kind: 'metric' as const,
+            loggableId: sectionId,
+            name,
+          })),
+        })
+      }
+
+      if (imageNames.length > 0) {
+        images.push({
+          sectionId,
+          label,
+          cards: imageNames.map(name => ({
+            cardId: `image:${sectionId}:${name}`,
+            title: `${label} > ${name}`,
+            render: () => (
+              <ComparisonGrid runIds={runIds} fillParent>
+                {(cellRunId) => (
+                  <ComparisonImageCell runId={cellRunId} loggableId={sectionId} name={name} fillParent />
+                )}
+              </ComparisonGrid>
+            ),
+            kind: 'image' as const,
+            loggableId: sectionId,
+            name,
+          })),
+        })
+      }
+
+      if (audioNames.length > 0) {
+        audio.push({
+          sectionId,
+          label,
+          cards: audioNames.map(name => ({
+            cardId: `audio:${sectionId}:${name}`,
+            title: `${label} > ${name}`,
+            render: () => (
+              <ComparisonGrid runIds={runIds} fillParent>
+                {(cellRunId) => (
+                  <ComparisonAudioCell runId={cellRunId} loggableId={sectionId} name={name} fillParent />
+                )}
+              </ComparisonGrid>
+            ),
+            kind: 'audio' as const,
+            loggableId: sectionId,
+            name,
+          })),
+        })
+      }
+    }
+
+    return { text, metrics, images, audio }
+  }, [runs, runIds, sectionDescriptors, effectiveRunIds, activeRuns, runColors, runNameFor])
+
+  return <GridShell runId={anchorRunId} tabs={tabs} loading={!runs.get(anchorRunId)?.graph} />
+}
+
+// ─── Shared shell (tab strip, search, chips, card grid, deep-link nav) ──────
+
+function GridShell({ runId, tabs, loading }: {
+  runId: string
+  tabs: Record<TabKey, SectionSpec[]>
+  loading: boolean
+}) {
+  const [activeTab, setActiveTab] = useState<TabKey>('metrics')
+  const [activeSectionId, setActiveSectionId] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  // Card flashed after a nebo:// deep link lands on it.
+  const [highlightedCardId, setHighlightedCardId] = useState<string | null>(null)
+  const pendingNavTarget = useStore(s => s.pendingNavTarget)
+  const setPendingNavTarget = useStore(s => s.setPendingNavTarget)
+
   // Only show tab buttons that have at least one card on this run.
   const visibleTabs = useMemo(() => {
     const order: { key: TabKey; label: string }[] = [
@@ -476,7 +708,7 @@ export function LoggableGridView({ runId }: LoggableGridViewProps) {
     return () => clearTimeout(t)
   }, [highlightedCardId])
 
-  if (!graph) {
+  if (loading) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground">
         <p className="text-sm">Loading...</p>

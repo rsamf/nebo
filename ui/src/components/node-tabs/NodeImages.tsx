@@ -149,14 +149,22 @@ export function VirtualizedImageList({
   )
 }
 
-function ComparisonImageCell({ runId, loggableId, fillParent }: { runId: string; loggableId: string; fillParent?: boolean }) {
+export function ComparisonImageCell({ runId, loggableId, name, fillParent }: {
+  runId: string
+  loggableId: string
+  // When set, narrows the cell to one image stream (the flat comparison
+  // view cards up per name; the node tab shows the whole loggable).
+  name?: string
+  fillParent?: boolean
+}) {
   const allImages = useStore(s => s.runs.get(runId)?.loggableImages[loggableId]) ?? []
   const timelineFilter = useTimelineFilter()
 
   const images = useMemo(() => {
-    const out = timelineFilter ? allImages.filter(img => timelineFilter.matchEntry(img)) : allImages
+    let out = name != null ? allImages.filter(img => img.name === name) : allImages
+    if (timelineFilter) out = out.filter(img => timelineFilter.matchEntry(img))
     return out
-  }, [allImages, timelineFilter])
+  }, [allImages, name, timelineFilter])
 
   if (images.length === 0) {
     return <p className="text-xs text-muted-foreground p-2">No images</p>

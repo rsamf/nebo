@@ -5,6 +5,7 @@ import type { AudioEntry, ImageEntry } from '@/store'
 import { api, type LoggableMetricSeries } from '@/lib/api'
 import { DEFAULT_RUN_COLOR } from '@/lib/colors'
 import { MetricPreview } from './MetricPreview'
+import { ImageWithLabels } from '@/components/shared/ImageWithLabels'
 import { firstSeriesFor, nearestAtStep } from './util'
 
 // Touch-first DAG canvas: dagre layout, one-finger pan, two-finger
@@ -327,19 +328,26 @@ export function MobileDagCanvas({
             </div>
             <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{n.sub}</div>
             {n.preview?.kind === 'image' && (
-              <div className="relative mt-2">
-                <img
-                  key={n.preview.image.mediaId}
-                  src={api.mediaUrl(runId, n.preview.image.mediaId)}
-                  alt={n.preview.image.name}
-                  loading="lazy"
-                  className="h-24 w-full rounded-lg border border-border object-cover"
-                />
-                {n.preview.image.step != null && (
-                  <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1 font-mono text-[9px] text-white">
-                    s{n.preview.image.step}
-                  </span>
-                )}
+              // Centered at intrinsic aspect ratio (capped to the node
+              // width and preview height) so the label overlays align —
+              // they stretch over the img box, which object-cover breaks.
+              <div className="mt-2 text-center">
+                <div className="relative inline-block max-w-full">
+                  <ImageWithLabels
+                    key={n.preview.image.mediaId}
+                    src={api.mediaUrl(runId, n.preview.image.mediaId)}
+                    labels={n.preview.image.labels}
+                    loggableName={n.id}
+                    imageName={n.preview.image.name ?? ''}
+                    alt={n.preview.image.name}
+                    imgClassName="block max-h-24 max-w-full rounded-lg border border-border"
+                  />
+                  {n.preview.image.step != null && (
+                    <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1 font-mono text-[9px] text-white">
+                      s{n.preview.image.step}
+                    </span>
+                  )}
+                </div>
               </div>
             )}
             {n.preview?.kind === 'audio' && (

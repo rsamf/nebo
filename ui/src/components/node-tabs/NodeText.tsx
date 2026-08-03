@@ -50,19 +50,38 @@ function SingleRunText({ runId, loggableId, fillParent }: { runId: string; logga
     return <p className="text-xs text-muted-foreground">No text for this node</p>
   }
 
+  // In fillParent mode the per-stream entry lists are the only scrollers:
+  // a single stream fills the tab outright, and multiple streams split the
+  // tab height between them (min 110px each — the outer overflow-auto only
+  // engages in the degenerate many-streams case). The old shape (outer
+  // scroller + 200px-capped streams) nested same-axis scrollbars.
   const single = byName.size === 1
   return (
-    <div className={cn('space-y-3', fillParent && 'h-full min-h-0 overflow-auto')}>
-      {[...byName.entries()].map(([name, entries]) => (
-        <TextBlock
-          key={name}
-          name={name}
-          entries={entries}
-          runId={runId}
-          loggableId={loggableId}
-          fill={fillParent && single}
-        />
-      ))}
+    <div
+      className={cn(
+        fillParent
+          ? single
+            ? 'h-full min-h-0'
+            : 'flex h-full min-h-0 flex-col gap-3 overflow-auto'
+          : 'space-y-3',
+      )}
+    >
+      {[...byName.entries()].map(([name, entries]) =>
+        fillParent && !single ? (
+          <div key={name} className="min-h-[110px] flex-1">
+            <TextBlock name={name} entries={entries} runId={runId} loggableId={loggableId} fill />
+          </div>
+        ) : (
+          <TextBlock
+            key={name}
+            name={name}
+            entries={entries}
+            runId={runId}
+            loggableId={loggableId}
+            fill={fillParent}
+          />
+        ),
+      )}
     </div>
   )
 }
@@ -278,23 +297,51 @@ function ComparisonText({ loggableId, runIds, fillParent }: {
     return <p className="text-xs text-muted-foreground p-2">No text</p>
   }
 
+  // fillParent + one stream: the grid fills the tab and each cell scrolls —
+  // no outer scroller at all (same shape as images/audio comparison).
+  // Multiple streams keep the outer scroller, with natural-height grids and
+  // per-cell caps inside it.
+  const singleName = names.length === 1
   return (
-    <div className={cn('space-y-4', fillParent && 'h-full min-h-0 overflow-auto')}>
+    <div
+      className={cn(
+        'space-y-4',
+        fillParent && 'h-full min-h-0',
+        fillParent && !singleName && 'overflow-auto',
+      )}
+    >
       {names.map(name => (
-        <div key={name}>
-          <div className="text-xs font-medium text-foreground truncate mb-1">{name}</div>
-          <ComparisonGrid runIds={runIds}>
-            {(cellRunId) => (
-              <ComparisonTextCell runId={cellRunId} loggableId={loggableId} name={name} />
-            )}
-          </ComparisonGrid>
+        <div key={name} className={cn(fillParent && singleName && 'flex h-full min-h-0 flex-col')}>
+          <div className="text-xs font-medium text-foreground truncate mb-1 shrink-0">{name}</div>
+          {fillParent && singleName ? (
+            <div className="flex-1 min-h-0">
+              <ComparisonGrid runIds={runIds} fillParent>
+                {(cellRunId) => (
+                  <ComparisonTextCell runId={cellRunId} loggableId={loggableId} name={name} fillParent />
+                )}
+              </ComparisonGrid>
+            </div>
+          ) : (
+            <ComparisonGrid runIds={runIds}>
+              {(cellRunId) => (
+                <ComparisonTextCell runId={cellRunId} loggableId={loggableId} name={name} />
+              )}
+            </ComparisonGrid>
+          )}
         </div>
       ))}
     </div>
   )
 }
 
-function ComparisonTextCell({ runId, loggableId, name }: { runId: string; loggableId: string; name: string }) {
+export function ComparisonTextCell({ runId, loggableId, name, fillParent }: {
+  runId: string
+  loggableId: string
+  name: string
+  // When true the cell scrolls at its grid-allotted height instead of the
+  // fixed 200px cap (used when the grid fills its parent).
+  fillParent?: boolean
+}) {
   const texts = useStore(s => s.runs.get(runId)?.texts ?? [])
   const timelineFilter = useTimelineFilter()
 
@@ -309,7 +356,7 @@ function ComparisonTextCell({ runId, loggableId, name }: { runId: string; loggab
   }
 
   return (
-    <div className="max-h-[200px] space-y-2 overflow-auto p-1">
+    <div className={cn('space-y-2 p-1 overflow-auto', fillParent ? 'h-full' : 'max-h-[200px]')}>
       {entries.map((t, i) => (
         <TextItem key={i} name={name} entry={t} runId={runId} loggableId={loggableId} />
       ))}

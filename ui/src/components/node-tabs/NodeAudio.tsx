@@ -50,14 +50,22 @@ export function AudioItem({ runId, entry, showTimestamp }: { runId: string; entr
   )
 }
 
-function ComparisonAudioCell({ runId, loggableId, fillParent }: { runId: string; loggableId: string; fillParent?: boolean }) {
+export function ComparisonAudioCell({ runId, loggableId, name, fillParent }: {
+  runId: string
+  loggableId: string
+  // When set, narrows the cell to one audio stream (the flat comparison
+  // view cards up per name; the node tab shows the whole loggable).
+  name?: string
+  fillParent?: boolean
+}) {
   const allAudioEntries = useStore(s => s.runs.get(runId)?.loggableAudio[loggableId]) ?? []
   const timelineFilter = useTimelineFilter()
 
   const audioEntries = useMemo(() => {
-    const out = timelineFilter ? allAudioEntries.filter(entry => timelineFilter.matchEntry(entry)) : allAudioEntries
+    let out = name != null ? allAudioEntries.filter(e => e.name === name) : allAudioEntries
+    if (timelineFilter) out = out.filter(entry => timelineFilter.matchEntry(entry))
     return out
-  }, [allAudioEntries, timelineFilter])
+  }, [allAudioEntries, name, timelineFilter])
 
   if (audioEntries.length === 0) {
     return <p className="text-xs text-muted-foreground p-2">No audio</p>
