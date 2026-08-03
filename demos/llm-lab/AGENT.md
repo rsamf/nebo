@@ -53,7 +53,7 @@ good and one bad example linked by `nebo://` deep link — e.g.
 `nebo://run/<id>/summarize/summarize/output@3`. Then:
 
 ```bash
-nebo groups doc set llm-lab/prompt-experiments findings --file findings.md
+nebo groups doc set llm-lab/prompt-experiments findings.md --file findings.md
 ```
 
 The doc renders in the UI's group tree with working deep links — that's

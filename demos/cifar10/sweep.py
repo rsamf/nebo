@@ -41,14 +41,14 @@ def publish_doc(results: list[dict]) -> None:
     doc = "\n".join(lines)
     try:
         from nebo.client import set_group_doc
-        set_group_doc(GROUP, "results", doc)
-        print(f"group doc written to {GROUP}/results")
+        set_group_doc(GROUP, "results.md", doc)
+        print(f"group doc written to {GROUP}/results.md")
     except Exception as exc:
         fallback = Path(__file__).parent / "sweep_results.md"
         fallback.write_text(doc)
         print(
             f"daemon unreachable ({exc}); doc saved to {fallback}\n"
-            f"publish with: nebo groups doc set {GROUP} results --file {fallback}"
+            f"publish with: nebo groups doc set {GROUP} results.md --file {fallback}"
         )
 
 

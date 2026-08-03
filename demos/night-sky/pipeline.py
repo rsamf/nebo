@@ -194,14 +194,14 @@ def publish_doc(results: list[tuple[str, float, int]]) -> None:
     group = "night-sky/threshold-study"
     try:
         from nebo.client import set_group_doc
-        set_group_doc(group, "comparison", doc)
-        print(f"group doc written to {group}/comparison")
+        set_group_doc(group, "comparison.md", doc)
+        print(f"group doc written to {group}/comparison.md")
     except Exception as exc:
         fallback = Path(__file__).parent / "threshold_study.md"
         fallback.write_text(doc)
         print(
             f"daemon unreachable ({exc}); doc saved to {fallback}\n"
-            f"publish with: nebo groups doc set {group} comparison --file {fallback}"
+            f"publish with: nebo groups doc set {group} comparison.md --file {fallback}"
         )
 
 
