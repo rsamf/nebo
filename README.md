@@ -66,6 +66,12 @@ These features enable observability and the autonomous development of such appli
 * One easily managable append-only file per run
 * SQLite caching for fast queries and memory budget
 
+## Demo projects
+
+Three real-world, CPU-only demo projects live in [`demos/`](demos/):
+a CIFAR-10 training sweep, a night-sky source-extraction pipeline
+(every image-label kind on real survey tiles), and an LLM
+summarize-and-judge chain with an agent analysis playbook.
 
 ## Installation
 It's recommended to install nebo with [uv](https://docs.astral.sh/uv/getting-started/installation/):
