@@ -1,9 +1,10 @@
 # Nebo demo projects
 
 Four real-world projects that exercise nebo's full surface — real
-computation on real data, CPU-friendly (GPU-accelerated where available),
-minutes per run. Each folder has its own README and `requirements.txt`;
-none of their dependencies touch the nebo package itself.
+computation on real data, CPU-only, minutes per run (vision-pipeline
+additionally auto-uses CUDA when available). Each folder has its own
+README and `requirements.txt`; none of their dependencies touch the
+nebo package itself.
 
 | demo | domain | headline features |
 | --- | --- | --- |

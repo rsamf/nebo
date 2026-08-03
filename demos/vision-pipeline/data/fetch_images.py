@@ -65,7 +65,15 @@ CANDIDATES = [
     "Baseball_swing.jpg",
 ]
 
-_OK_LICENSE = re.compile(r"(cc0|cc[ -]by(?:[ -]sa)?|public domain|pd)", re.I)
+# Allow CC0 / CC BY / CC BY-SA / public domain; explicitly reject the
+# non-commercial and no-derivatives variants an unanchored match would let
+# through on a mislabeled upload.
+_ALLOW_LICENSE = re.compile(r"cc0|cc[ -]by|public domain|\bpd\b", re.I)
+_DENY_LICENSE = re.compile(r"\bnc\b|\bnd\b|non-?commercial|no-?deriv", re.I)
+
+
+def license_ok(short_name: str) -> bool:
+    return bool(_ALLOW_LICENSE.search(short_name)) and not _DENY_LICENSE.search(short_name)
 
 
 def lookup(title: str) -> dict | None:
@@ -85,7 +93,7 @@ def lookup(title: str) -> dict | None:
     if not info:
         return None
     license_short = (info.get("LicenseShortName") or {}).get("value", "")
-    if not _OK_LICENSE.search(license_short):
+    if not license_ok(license_short):
         return None
     author = re.sub(r"<[^>]+>", "", (info.get("Artist") or {}).get("value", "unknown")).strip()
     return {"license": license_short, "author": author or "unknown"}
@@ -98,7 +106,7 @@ def fetch(title: str, index: int) -> str | None:
         return None
     url = (
         "https://commons.wikimedia.org/wiki/Special:FilePath/"
-        f"{title}?width=640"
+        f"{urllib.parse.quote(urllib.parse.unquote(title), safe='')}?width=640"
     )
     req = urllib.request.Request(url, headers=UA)
     with urllib.request.urlopen(req, timeout=60) as resp:

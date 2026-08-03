@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import time
+import zlib
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -52,7 +53,9 @@ _TSNE: dict = {"buffer": [], "embedding": None}
 
 
 def class_color(name: str) -> str:
-    return PALETTE[hash(name) % len(PALETTE)]
+    # crc32, not hash(): stable across processes so regenerated screenshots
+    # keep the same class -> color mapping.
+    return PALETTE[zlib.crc32(name.encode()) % len(PALETTE)]
 
 
 def stamp(t0: float) -> float:

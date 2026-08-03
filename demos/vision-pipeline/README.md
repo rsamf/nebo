@@ -24,7 +24,8 @@ python -m venv ../.venv && ../.venv/bin/pip install -e ../.. -r requirements.txt
 ```
 
 First run downloads ~110 MB of pretrained torchvision weights into the
-torch hub cache. `--limit N` bounds the sample count; `--conf` sets the
+torch hub cache. `--limit N` bounds the sample count (below 3 samples the
+TSNE scatter is skipped — it needs warmup points); `--conf` sets the
 postprocess confidence cut (run name is `conf=<value>`).
 
 ## GPU acceleration
