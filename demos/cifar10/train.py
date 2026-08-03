@@ -95,12 +95,11 @@ def train_epoch(model, optimizer, train_loader, epoch: int) -> float:
         if i % 10 == 0:
             nb.log_line("train/batch_loss", loss.item(), step=epoch * len(train_loader) + i)
     avg = float(np.mean(losses))
-    nb.log_line("epoch/loss", avg, step=epoch, tags=["train"])
     return avg
 
 
 @nb.fn()
-def evaluate(model, test_loader, epoch: int) -> float:
+def evaluate(model, test_loader, epoch: int, train_loss: float) -> float:
     """Validation pass: loss/accuracy, per-class bar, misclassified images."""
     model.eval()
     correct = np.zeros(10)
@@ -131,6 +130,7 @@ def evaluate(model, test_loader, epoch: int) -> float:
                 )
                 shown += 1
     acc = float(100.0 * correct.sum() / total.sum())
+    nb.log_line("epoch/loss", train_loss, step=epoch, tags=["train"])
     nb.log_line("epoch/loss", float(np.mean(losses)), step=epoch, tags=["val"])
     nb.log_line("epoch/accuracy", acc, step=epoch, tags=["val"])
     nb.log_bar(
@@ -188,8 +188,8 @@ def run_training(cfg: dict) -> float:
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg["lr"])
     acc = 0.0
     for epoch in nb.track(range(cfg["epochs"]), name="epochs"):
-        train_epoch(model, optimizer, train_loader, epoch)
-        acc = evaluate(model, test_loader, epoch)
+        train_avg = train_epoch(model, optimizer, train_loader, epoch)
+        acc = evaluate(model, test_loader, epoch, train_avg)
         log_weight_histograms(model, epoch)
     embedding_scatter(model, test_loader)
     nb.log_text("summary", f"final val accuracy {acc:.1f}%")

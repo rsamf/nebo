@@ -10,7 +10,7 @@ tracking, config capture, and a 4-run sweep group for comparison views.
 
 ```bash
 python -m venv ../.venv && ../.venv/bin/pip install -e ../.. -r requirements.txt
-nebo serve            # in another terminal; the UI is at localhost:7861
+../.venv/bin/nebo serve   # from this directory
 ../.venv/bin/python train.py           # one run (group "cifar10")
 ../.venv/bin/python sweep.py           # 4 runs into cifar10/sweep + results doc
 ```

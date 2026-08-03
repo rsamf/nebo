@@ -13,7 +13,7 @@ chart, sets an alert rule, and authors a group doc with `nebo://` links.
 
 ```bash
 python -m venv ../.venv && ../.venv/bin/pip install -e ../.. -r requirements.txt
-nebo serve                                # in another terminal
+../.venv/bin/nebo serve   # from this directory
 ../.venv/bin/python chain.py              # one run (group "llm-lab")
 ../.venv/bin/python experiments.py        # 3 prompt variants -> llm-lab/prompt-experiments
 ```

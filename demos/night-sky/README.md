@@ -13,7 +13,7 @@ source-class pie, and per-tile progress.
 
 ```bash
 python -m venv ../.venv && ../.venv/bin/pip install -e ../.. -r requirements.txt
-nebo serve                                  # in another terminal
+../.venv/bin/nebo serve   # from this directory
 ../.venv/bin/python pipeline.py             # one run, k=4
 ../.venv/bin/python pipeline.py --populate  # 3 thresholds -> night-sky/threshold-study
 ```

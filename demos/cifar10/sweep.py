@@ -47,7 +47,7 @@ def publish_doc(results: list[dict]) -> None:
         fallback = Path(__file__).parent / "sweep_results.md"
         fallback.write_text(doc)
         print(
-            f"daemon unreachable ({exc}); doc saved to {fallback}\n"
+            f"doc publish failed ({exc}); doc saved to {fallback}\n"
             f"publish with: nebo groups doc set {GROUP} results.md --file {fallback}"
         )
 

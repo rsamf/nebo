@@ -1,4 +1,3 @@
-# saved as demos/_inspect.py in Task 1 (dev helper, committed)
 """Print entry-type counts for the newest .nebo file in a logdir (argv[1])."""
 import glob
 import sys

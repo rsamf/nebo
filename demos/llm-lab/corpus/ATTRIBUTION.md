@@ -14,3 +14,6 @@ Intro extracts from the English Wikipedia (CC BY-SA 4.0):
 - [Public-key cryptography](https://en.wikipedia.org/wiki/Public-key_cryptography)
 - [Global Positioning System](https://en.wikipedia.org/wiki/Global_Positioning_System)
 - [Lithium-ion battery](https://en.wikipedia.org/wiki/Lithium-ion_battery)
+
+These text files are CC BY-SA 4.0 as noted above and are **not** covered by
+this repository's MIT license.
