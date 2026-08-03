@@ -311,6 +311,44 @@ class TestDataFlowEdges:
         assert (self._nid("process_b"), self._nid("merge")) in edges
         assert len(get_state().edges) == 5
 
+    def test_interned_primitives_carry_no_provenance(self) -> None:
+        """Interned singletons (small ints, bools, tiny strings) must not
+        create data-flow edges.
+
+        CPython interns ints in [-5, 256] (and bools, 0/1-char strings,
+        the empty tuple), so id() identity on them says nothing about
+        which node produced them. A node returning a dict containing a
+        small int must not become the "producer" of that int for a later
+        sibling call that happens to receive the same number (e.g. a
+        loop step counter) — that manufactures cycles like
+        judge -> summarize alongside the real summarize -> judge.
+        """
+        @fn()
+        def scorer(draft, step):
+            return {"word_count": 7, "ok": True, "grade": "a"}
+
+        @fn()
+        def writer(doc, step):
+            return f"draft-{step}"
+
+        @fn()
+        def pipeline():
+            docs = [{"i": i} for i in range(10)]
+            for step, doc in enumerate(docs):
+                draft = writer(doc, step)
+                scorer(draft, step)
+
+        pipeline()
+        edges = self._edge_set()
+
+        # The real data-flow edge survives (draft string flows into scorer).
+        assert (self._nid("writer"), self._nid("scorer")) in edges
+        # No false reverse edge from the interned 7 / True / "a" colliding
+        # with later step ints, and no self-edges.
+        assert (self._nid("scorer"), self._nid("writer")) not in edges
+        assert (self._nid("scorer"), self._nid("scorer")) not in edges
+        assert (self._nid("writer"), self._nid("writer")) not in edges
+
     def test_fallback_to_parent_when_no_data_dependency(self) -> None:
         """When a node receives no node-produced args, fall back to parent."""
         @fn()

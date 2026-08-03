@@ -29,6 +29,31 @@ RETURN_ORIGINS_MAX = 4096
 _ORIGIN_SWEEP_EVERY = 1024
 
 
+def _identity_is_provenance(value: Any) -> bool:
+    """Whether seeing ``value`` again (by ``is``) implies this node made it.
+
+    Origin tracking equates object identity with provenance. CPython
+    interns/caches some immutables — bools, ints in [-5, 256], 0- and
+    1-char strings/bytes, the empty tuple — making them program-wide
+    singletons, so identity on them carries no provenance: a node that
+    returns ``{"count": 7}`` did not produce every later ``7`` (e.g. a
+    step counter), and tracking it manufactures false data-flow edges,
+    including cycles and self-edges. Such values are never registered.
+    (Multi-char string literals can also be interned per code object;
+    that residual risk is accepted — excluding all strings would drop
+    real edges like a generated text flowing into a consumer.)
+    """
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return not (-5 <= value <= 256)
+    if isinstance(value, (str, bytes)):
+        return len(value) > 1
+    if isinstance(value, tuple):
+        return len(value) > 0
+    return True
+
+
 @dataclass
 class MetricCursor:
     """Tiny per-(loggable, metric-name) state kept on the SDK.
@@ -307,9 +332,12 @@ class SessionState:
         Weakrefable values (arrays, tensors, custom objects) are stored
         via weakref — the tracker never keeps them alive. Builtin
         containers/scalars don't support weakrefs and keep a strong ref
-        inside a bounded recency window (RETURN_ORIGINS_MAX). Caller
-        holds _lock_state.
+        inside a bounded recency window (RETURN_ORIGINS_MAX). Interned
+        singletons are skipped — identity on them is not provenance
+        (see _identity_is_provenance). Caller holds _lock_state.
         """
+        if not _identity_is_provenance(value):
+            return
         try:
             ref: Any = weakref.ref(value)
             is_weak = True
@@ -339,7 +367,9 @@ class SessionState:
         """Record that a return value was produced by a given node.
 
         Tracks id(value) and, for tuples/lists/dicts, also tracks
-        id(element) for each element one level deep. Skips None.
+        id(element) for each element one level deep. Skips None and
+        interned singletons (bools, small ints, 0/1-char strings, the
+        empty tuple) — their identity carries no provenance.
 
         Entries store a weakref where the type supports it (so the
         tracker never extends user data's lifetime) or a strong ref in
