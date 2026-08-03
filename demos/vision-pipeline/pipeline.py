@@ -49,7 +49,7 @@ nb.ui(view="flat", tracker="step")
 # Per-run accumulators (cleared by run_pipeline). summarize() reads STATS
 # via depends_on — data flows through module state, not arguments.
 STATS: list[dict] = []
-_TSNE: dict = {"buffer": [], "embedding": None}
+_TSNE: dict = {"buffer": [], "embedding": None, "perplexity": None}
 
 
 def class_color(name: str) -> str:
@@ -60,6 +60,31 @@ def class_color(name: str) -> str:
 
 def stamp(t0: float) -> float:
     return round(time.perf_counter() - t0, 3)
+
+
+def _emit_tsne_point(step: int, label: str, xy) -> None:
+    nb.log_scatter(
+        "embeddings/tsne",
+        {label: [(round(float(xy[0]), 3), round(float(xy[1]), 3))]},
+        step=step,
+        colors=True,
+    )
+
+
+def _tsne_fit_and_emit() -> None:
+    """Fit once on the buffered warmup vectors and emit their points.
+
+    The perplexity honors openTSNE's ``3 * perplexity <= n - 1`` constraint,
+    and is reused by every later ``transform`` call — without it, transform
+    defaults to perplexity 5 and warns on stderr once per sample.
+    """
+    from openTSNE import TSNE
+
+    X = np.stack([v for _, _, v in _TSNE["buffer"]])
+    _TSNE["perplexity"] = min(30.0, (len(X) - 1) / 3)
+    _TSNE["embedding"] = TSNE(perplexity=_TSNE["perplexity"], random_state=0).fit(X)
+    for (s, label, _), xy in zip(_TSNE["buffer"], np.asarray(_TSNE["embedding"])):
+        _emit_tsne_point(s, label, xy)
 
 
 @nb.fn()
@@ -139,6 +164,12 @@ def detect(models: dict, arr: np.ndarray, tensor: torch.Tensor, step: int) -> di
     nb.log_line("objects", len(names), step=step)
     if len(names):
         nb.log_line("mean_confidence", round(float(dets["scores"].mean()), 3), step=step)
+    counts = Counter(names)
+    nb.log_text(
+        "detect/summary",
+        ", ".join(f"{v} {k}" for k, v in counts.most_common()) or "nothing above threshold",
+        step=step,
+    )
     if step % STAGE_CARD_EVERY == 0:
         by_class: dict[str, list] = defaultdict(list)
         for box, name in zip(dets["boxes"].tolist(), names):
@@ -148,7 +179,14 @@ def detect(models: dict, arr: np.ndarray, tensor: torch.Tensor, step: int) -> di
             for name, boxes in sorted(by_class.items())
         ]
         if groups:
-            nb.log_image(arr, name="stages/detections", step=step, boxes=groups)
+            centers = [
+                [(x1 + x2) / 2, (y1 + y2) / 2]
+                for x1, y1, x2, y2 in dets["boxes"].tolist()
+            ]
+            nb.log_image(
+                arr, name="stages/detections", step=step,
+                boxes=groups, points=nb.labels.Points(centers, CENTER_COLOR),
+            )
     return dets
 
 
@@ -231,29 +269,15 @@ def embed(models: dict, pil: Image.Image, dominant: str, step: int, warmup: int)
         feats = models["embedder"].features(batch)
         vec = torch.flatten(F.adaptive_avg_pool2d(feats, 1), 1)[0].cpu().numpy()
 
-    def emit(s: int, label: str, xy) -> None:
-        nb.log_scatter(
-            "embeddings/tsne",
-            {label: [(round(float(xy[0]), 3), round(float(xy[1]), 3))]},
-            step=s,
-            colors=True,
-        )
-
     if _TSNE["embedding"] is None:
         _TSNE["buffer"].append((step, dominant, vec))
         if len(_TSNE["buffer"]) >= warmup:
-            from openTSNE import TSNE
-
-            X = np.stack([v for _, _, v in _TSNE["buffer"]])
-            perplexity = max(2.0, min(30.0, (len(X) - 1) / 3))
-            _TSNE["embedding"] = TSNE(
-                perplexity=perplexity, random_state=0
-            ).fit(X)
-            for (s, label, _), xy in zip(_TSNE["buffer"], np.asarray(_TSNE["embedding"])):
-                emit(s, label, xy)
+            _tsne_fit_and_emit()
     else:
-        xy = np.asarray(_TSNE["embedding"].transform(vec[None, :]))[0]
-        emit(step, dominant, xy)
+        xy = np.asarray(
+            _TSNE["embedding"].transform(vec[None, :], perplexity=_TSNE["perplexity"])
+        )[0]
+        _emit_tsne_point(step, dominant, xy)
     nb.log_line("latency", stamp(t0), step=step)
 
 
@@ -297,6 +321,7 @@ def run_pipeline(cfg: dict) -> dict:
     STATS.clear()
     _TSNE["buffer"] = []
     _TSNE["embedding"] = None
+    _TSNE["perplexity"] = None
     models = load_models(cfg["device"])
     paths = load_dataset(cfg["limit"])
     warmup = min(12, max(3, len(paths) - 1))
@@ -306,6 +331,16 @@ def run_pipeline(cfg: dict) -> dict:
         seg = segment(models, pil, arr, step)
         dominant = postprocess(arr, dets, seg, cfg["conf"], step)
         embed(models, pil, dominant, step, warmup)
+    # A run shorter than the warmup threshold never triggers the in-loop
+    # fit: flush what buffered, or say so instead of an empty scatter.
+    if _TSNE["embedding"] is None:
+        if len(_TSNE["buffer"]) >= 3:
+            _tsne_fit_and_emit()
+        else:
+            nb.log_text(
+                "embeddings/status",
+                f"TSNE skipped: only {len(_TSNE['buffer'])} sample(s) buffered, need 3+",
+            )
     return summarize()
 
 
@@ -319,6 +354,11 @@ def main(argv=None) -> dict:
     device = args.device
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
+    if args.conf < DETECT_MIN_SCORE:
+        print(
+            f"note: --conf {args.conf:g} is below the detect stage's raw floor "
+            f"({DETECT_MIN_SCORE}); detections below that are never produced."
+        )
     limit = 4 if args.smoke else args.limit
     cfg = {
         "detector": "fasterrcnn_mobilenet_v3_large_fpn",

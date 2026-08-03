@@ -30,8 +30,8 @@ MIT license; each remains under the license listed below.
 | 021.jpg | [2021-07-20_02_Maine_Marine_Patrol_Boat_at_Winter_Harbor_ME_USA.jpg](https://commons.wikimedia.org/wiki/File:2021-07-20_02_Maine_Marine_Patrol_Boat_at_Winter_Harbor_ME_USA.jpg) | Gordon Leggett | CC BY-SA 4.0 |
 | 022.jpg | [043_St._Gallen,_Switzerland_-_sidewalk_cafe.jpg](https://commons.wikimedia.org/wiki/File:043_St._Gallen,_Switzerland_-_sidewalk_cafe.jpg) | Marek Ślusarczyk (Tupungato) Photo portfolio | CC BY 3.0 |
 | 023.jpg | [Jeseník_train_station_2025.01.jpg](https://commons.wikimedia.org/wiki/File:Jeseník_train_station_2025.01.jpg) | Pudelek | CC BY-SA 4.0 |
-| 024.jpg | [YellowLabradorLooking_new.jpg](https://commons.wikimedia.org/wiki/File:YellowLabradorLooking_new.jpg) | derivative work: Djmirko (talk)wereweweewewewg.jpg | CC BY-SA 3.0 |
-| 025.jpg | [Good_Food_Display_-_NCI_Visuals_Online.jpg](https://commons.wikimedia.org/wiki/File:Good_Food_Display_-_NCI_Visuals_Online.jpg) | Unknown authorUnknown author | Public domain |
+| 024.jpg | [YellowLabradorLooking_new.jpg](https://commons.wikimedia.org/wiki/File:YellowLabradorLooking_new.jpg) | Djmirko (derivative work) | CC BY-SA 3.0 |
+| 025.jpg | [Good_Food_Display_-_NCI_Visuals_Online.jpg](https://commons.wikimedia.org/wiki/File:Good_Food_Display_-_NCI_Visuals_Online.jpg) | Unknown author | Public domain |
 | 026.jpg | [Eq_it-na_pizza-margherita_sep2005_sml.jpg](https://commons.wikimedia.org/wiki/File:Eq_it-na_pizza-margherita_sep2005_sml.jpg) | Valerio Capello at English Wikipedia | CC BY-SA 3.0 |
 | 027.jpg | [NCI_Visuals_Food_Hamburger.jpg](https://commons.wikimedia.org/wiki/File:NCI_Visuals_Food_Hamburger.jpg) | Len Rizzi (photographer) | Public domain |
 | 028.jpg | [Rush_hour_at_Shinjuku_02.JPG](https://commons.wikimedia.org/wiki/File:Rush_hour_at_Shinjuku_02.JPG) | Chris 73 | CC BY-SA 3.0 |

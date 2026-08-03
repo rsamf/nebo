@@ -19,7 +19,7 @@ bar/pie/histogram rollups.
 ```bash
 python -m venv ../.venv && ../.venv/bin/pip install -e ../.. -r requirements.txt
 ../.venv/bin/nebo serve   # from this directory, in another terminal
-../.venv/bin/python pipeline.py            # ~3-5 min CPU, 28 samples
+../.venv/bin/python pipeline.py            # ~3-5 min CPU, 30 samples
 ../.venv/bin/python pipeline.py --smoke    # 4 samples
 ```
 
@@ -31,8 +31,8 @@ postprocess confidence cut (run name is `conf=<value>`).
 ## GPU acceleration
 
 The pipeline auto-selects CUDA when available (`--device` to force).
-Note the shared `demos/.venv` installs CPU-only torch wheels (via the
-cifar10/llm-lab requirements); for GPU, install a CUDA torch build in a
+Note `requirements.txt` pins CPU-only torch wheels; for GPU, install a
+CUDA torch build in a
 separate venv: `pip install torch torchvision` from the default PyPI
 index on a CUDA machine, then the remaining requirements.
 
