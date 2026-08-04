@@ -53,19 +53,19 @@ These features enable observability and the autonomous development of such appli
 
 ## Features
 
-* Local-first and free, cloud/remote-hosting optional
-* Mobile-first web UI
-* AI-native integration with fully interoperable CLI, agent skills, and MCP
-* Captured log types: text, metrics, images, audio, md, progress
-* Data scrubbing between time/steps
-* Function-level logging that automatically infers a DAG from your call graph
-* HTML embedding with iframes of many UI components: runs, DAG nodes, charts, media
-* Notebook embedding via `nb.show()` delivering a Jupyter-friendly iframe of any slice of a run
-* One-command deploy to a Hugging Face Space via `nebo deploy` with public/private modes
-* Automatically organize runs into a tree with groups
-* One easily managable append-only file per run
-* SQLite caching for fast queries and memory budget
-* Wandb drop-in replacement
+* 🏠 Local-first and free, cloud/remote-hosting optional
+* 📱 Mobile-first web UI
+* 🤖 AI-native integration with fully interoperable CLI, agent skills, and MCP
+* 📝 Captured log types: text, metrics, images, audio, md, progress
+* 🎚️ Data scrubbing between time/steps
+* 🕸️ Function-level logging that automatically infers a DAG from your call graph
+* 🧩 HTML embedding with iframes of many UI components: runs, DAG nodes, charts, media
+* 📓 Notebook embedding via `nb.show()` delivering a Jupyter-friendly iframe of any slice of a run
+* 🤗 One-command deploy to a Hugging Face Space via `nebo deploy` with public/private modes
+* 🌳 Automatically organize runs into a tree with groups
+* 📄 One easily managable append-only file per run
+* ⚡ SQLite caching for fast queries and memory budget
+* 🔌 Wandb drop-in replacement
 
 ## Demo projects
 
