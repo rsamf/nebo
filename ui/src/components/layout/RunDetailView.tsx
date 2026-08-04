@@ -37,7 +37,9 @@ export function RunDetailView() {
 
   // For comparison groups, use the first run's data for the graph view
   const effectiveRunId = isComparison ? comparisonRunIds[0] ?? selectedRunId : selectedRunId
-  const run = useRunData(effectiveRunId)
+  // Pass the raw selection (the `cmp:` id for groups): useRunData hydrates
+  // every member run of a group and returns the anchor run's state.
+  const run = useRunData(selectedRunId)
   const isDesktop = useIsDesktop()
   const viewMode = useStore(s => s.viewMode)
   const setViewMode = useStore(s => s.setViewMode)
@@ -130,19 +132,24 @@ export function RunDetailView() {
               const r = runs.get(rid)
               return r?.summary.run_name || r?.summary.script_path.split('/').pop() || rid
             })
-            const fullText = `Showing graph of ${names[0]}, and comparing it with ${names.slice(1).join(', ')}`
+            // The DAG renders the first run's graph with the others compared
+            // into it; the flat view is a symmetric union of all runs.
+            const isGraph = effectiveViewMode === 'graph'
+            const fullText = isGraph
+              ? `Showing graph of ${names[0]}, and comparing it with ${names.slice(1).join(', ')}`
+              : `Comparing ${names.join(', ')}`
             return (
               <div
                 className="truncate whitespace-nowrap px-4 py-1.5 border-t border-border bg-muted/30 text-xs"
                 title={fullText}
               >
-                <span className="text-muted-foreground">Showing graph of </span>
+                <span className="text-muted-foreground">{isGraph ? 'Showing graph of ' : 'Comparing '}</span>
                 {comparisonRunIds.map((rid, i) => {
                   const color = runColors.get(rid) ?? '#60a5fa'
                   return (
                     <span key={rid} className="inline-flex items-center gap-1">
-                      {i === 1 && <span className="text-muted-foreground">, and comparing it with </span>}
-                      {i > 1 && <span className="text-muted-foreground">, </span>}
+                      {isGraph && i === 1 && <span className="text-muted-foreground">, and comparing it with </span>}
+                      {(isGraph ? i > 1 : i > 0) && <span className="text-muted-foreground">, </span>}
                       <span className="w-2 h-2 rounded-full inline-block shrink-0" style={{ backgroundColor: color }} />
                       <span className="font-medium text-foreground">{names[i]}</span>
                     </span>
@@ -158,7 +165,10 @@ export function RunDetailView() {
       <div className="flex-1 overflow-hidden flex">
         {effectiveViewMode === 'flat' ? (
           <div className="flex-1 overflow-hidden">
-            <LoggableGridView runId={effectiveRunId!} />
+            <LoggableGridView
+              runId={effectiveRunId!}
+              comparisonRunIds={isComparison ? comparisonRunIds : undefined}
+            />
           </div>
         ) : (
           <div className="flex-1 overflow-hidden">

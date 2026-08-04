@@ -494,7 +494,8 @@ function ComparisonMetrics({
   )
 }
 
-function ComparisonMetricBlock({
+// Exported for the flat view's comparison cards (one block per metric name).
+export function ComparisonMetricBlock({
   name,
   type,
   loggableId,

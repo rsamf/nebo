@@ -11,7 +11,10 @@ export function Sidebar() {
     <div className="flex flex-col h-full bg-sidebar border-r border-sidebar-border">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-sidebar-border">
-        <h1 className="text-lg font-semibold text-sidebar-foreground">Nebo</h1>
+        <div className="flex items-center gap-2">
+          <img src="/favicon.png" alt="" className="h-5 w-5" />
+          <h1 className="text-lg font-semibold text-sidebar-foreground">Nebo</h1>
+        </div>
         <div className="flex items-center gap-1">
           {connected ? (
             <Tooltip>

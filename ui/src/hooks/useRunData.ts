@@ -149,7 +149,16 @@ export function useRunData(runId: string | null): RunState | null {
 
   const isComparison = runId?.startsWith('cmp:') ?? false
   const group = isComparison && runId ? comparisonGroups.get(runId) : null
-  const run = runId && !isComparison ? runs.get(runId) : undefined
+  // For a comparison group, surface the first run's state (the anchor run
+  // callers render the graph/header from) while the group effect below
+  // hydrates every member run.
+  const run = runId
+    ? isComparison
+      ? group
+        ? runs.get(group.runIds[0] ?? '')
+        : undefined
+      : runs.get(runId)
+    : undefined
 
   // Fetch data for a single run.
   //

@@ -24,6 +24,7 @@ export function ImageWithLabels({
   imageName,
   alt,
   className,
+  imgClassName,
 }: {
   src: string
   labels?: LabelsPayload | null
@@ -31,6 +32,11 @@ export function ImageWithLabels({
   imageName: string
   alt?: string
   className?: string
+  // Replaces the img's default sizing/chrome classes (thumbnail callers
+  // need their own constraints). Overlays are stretched over the img's
+  // border box, so any override must keep the box at the image's
+  // intrinsic aspect ratio — no object-cover/object-contain cropping.
+  imgClassName?: string
 }) {
   const labelKeySettings = useStore(s => s.labelKeySettings)
   const registerLabelKey = useStore(s => s.registerLabelKey)
@@ -69,7 +75,7 @@ export function ImageWithLabels({
       <img
         src={src}
         alt={alt ?? imageName}
-        className="max-w-full block rounded border border-border"
+        className={imgClassName ?? 'max-w-full block rounded border border-border'}
         onLoad={(e) => {
           const el = e.currentTarget
           setDims({ w: el.naturalWidth, h: el.naturalHeight })
