@@ -65,6 +65,7 @@ These features enable observability and the autonomous development of such appli
 * Automatically organize runs into a tree with groups
 * One easily managable append-only file per run
 * SQLite caching for fast queries and memory budget
+* Wandb drop-in replacement
 
 ## Demo projects
 
@@ -86,7 +87,7 @@ uv run nebo skills install
 ## Usage
 
 
-#### A simple hello world program:
+#### A simple hello world program
 
 ```python
 import nebo as nb
@@ -95,7 +96,7 @@ nb.log_text("greeting", "Hello world!")
 ```
 
 
-#### Track your training experiment:
+#### Track your training experiment
 
 ```python
 import torch
@@ -111,6 +112,23 @@ for batch in nb.track(Y):  # progress tracking
     nb.log_line("acc", acc)
 ```
 
+#### Drop-in wandb replacement
+
+Easily transfer from wandb by changing one import:
+
+```python
+import nebo.wandb as wandb # <- change from import wandb
+
+wandb.init(project="mnist", name="run-1", config={"lr": 1e-3})
+
+for epoch in range(10):
+    loss, acc = train_epoch()
+    wandb.log({"loss": loss, "accuracy": acc})
+
+wandb.finish()
+```
+
+Values are dispatched by type: numbers become line charts, numpy/PIL images become image streams, and everything else lands as text. `wandb.config` reads/writes work too (forwarded to `nb.log_cfg`). The shim covers the common surface — `init`, `log`, `finish`, `config`, `run` — not artifacts, sweeps, or `watch`.
 
 ### Start the Daemon and View the UI
 
@@ -165,7 +183,6 @@ The deploy prints everything needed to connect, including the API token. Set tho
 ```bash
 export NEBO_URI=https://<owner>-<name>.hf.space    # SDK: runs stream to the Space
 export NEBO_API_TOKEN=nb_...                       # required for writes
-export NEBO_URL=https://<owner>-<name>.hf.space    # points the nebo CLI / MCP at it
 ```
 
 Or connect with the SDK:
@@ -176,7 +193,9 @@ import nebo as nb
 nb.init(uri="https://<owner>-<name>.hf.space", api_token="nb_...")
 ```
 
-#### Then, embed your logs with iframes
+Or simply tell your agent to deploy your logs to HF Spaces.
+
+#### Then, you can embed your logs with iframes
 
 In addition to viewing your logs at `https://<owner>-<name>.hf.space`, you can embed certain UI components into any web page:
 
@@ -228,4 +247,4 @@ Two execution modes:
 - **Local mode** (default): In-process only. No daemon needed.
 - **Server mode**: Events stream to a persistent daemon via HTTP. Use `nebo serve` to start the daemon.
 
-The daemon can run on your laptop, in CI, or on a Hugging Face Space (`nebo deploy`). The same SDK code works against any of them — set `NEBO_URL` and `NEBO_API_TOKEN` to point at the target. When the daemon enforces auth, every API request must carry the token via the `X-Nebo-Token` header (HTTP) or the `?token=…` query param (browsers / WebSocket).
+The daemon can run on your laptop, in CI, or on a Hugging Face Space (`nebo deploy`). The same SDK code works against any of them — set `NEBO_CLI_URL` and `NEBO_API_TOKEN` to point at the target. When the daemon enforces auth, every API request must carry the token via the `X-Nebo-Token` header (HTTP) or the `?token=…` query param (browsers / WebSocket).
