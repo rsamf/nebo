@@ -341,7 +341,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         ))
         return
 
-    port = getattr(args, "port", None) or int(os.environ.get("NEBO_PORT", 7861))
+    port = getattr(args, "port", None) or int(os.environ.get("NEBO_CLI_PORT", 7861))
     mode_note = f"  (mode: {mode})" if mode else ""
     print(f"Nebo daemon: running on port {port}{mode_note}")
 
@@ -516,7 +516,7 @@ def cmd_load(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     # --url triggers the event-replay path (daemon can't see our filesystem).
-    url = getattr(args, "url", None) or os.environ.get("NEBO_URL")
+    url = getattr(args, "url", None) or os.environ.get("NEBO_CLI_URL")
     api_token = getattr(args, "api_token", None) or os.environ.get("NEBO_API_TOKEN")
 
     if url:
@@ -1024,12 +1024,12 @@ def _common_conn_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(add_help=False)
     p.add_argument(
         "--url",
-        help="Daemon URL (overrides --port). Default: NEBO_URL env or http://localhost:7861.",
+        help="Daemon URL (overrides --port). Default: NEBO_CLI_URL env or http://localhost:7861.",
     )
     p.add_argument(
         "--port",
         type=int,
-        help="Daemon port. Default: NEBO_PORT env or 7861.",
+        help="Daemon port. Default: NEBO_CLI_PORT env or 7861.",
     )
     p.add_argument(
         "--api-token",

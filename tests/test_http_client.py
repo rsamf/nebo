@@ -14,14 +14,14 @@ def test_resolve_url_uses_port_when_no_url():
 
 
 def test_resolve_url_reads_env(monkeypatch):
-    monkeypatch.setenv("NEBO_URL", "http://daemon.local")
+    monkeypatch.setenv("NEBO_CLI_URL", "http://daemon.local")
     assert _resolve_url() == "http://daemon.local"
 
 
 def test_resolve_url_defaults(monkeypatch):
-    # No args, no env (NEBO_URL/NEBO_PORT unset via monkeypatch).
-    monkeypatch.delenv("NEBO_URL", raising=False)
-    monkeypatch.delenv("NEBO_PORT", raising=False)
+    # No args, no env (NEBO_CLI_URL/NEBO_CLI_PORT unset via monkeypatch).
+    monkeypatch.delenv("NEBO_CLI_URL", raising=False)
+    monkeypatch.delenv("NEBO_CLI_PORT", raising=False)
     assert _resolve_url() == "http://localhost:7861"
 
 

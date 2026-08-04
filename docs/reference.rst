@@ -472,7 +472,7 @@ Commands
 
 ``load``
     Load a ``.nebo`` file into the daemon for viewing and Q&A. With
-    ``--url`` (or ``NEBO_URL`` env), the file is read locally and its
+    ``--url`` (or ``NEBO_CLI_URL`` env), the file is read locally and its
     events are replayed to the remote daemon — useful when the daemon
     is on a Hugging Face Space and can't see the user's filesystem.
 
@@ -482,7 +482,7 @@ Commands
         $ nebo load <file> --url URL [--api-token TOKEN]
 
     ``--url URL``
-        Remote daemon URL (e.g. an HF Space). Defaults to ``NEBO_URL``.
+        Remote daemon URL (e.g. an HF Space). Defaults to ``NEBO_CLI_URL``.
 
     ``--api-token TOKEN``
         Token for the remote daemon. Defaults to ``NEBO_API_TOKEN``.

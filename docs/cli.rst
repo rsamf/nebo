@@ -29,12 +29,12 @@ default.
 
 .. option:: --url <url>
 
-    Daemon URL (overrides ``--port``). Default: ``NEBO_URL`` env or
+    Daemon URL (overrides ``--port``). Default: ``NEBO_CLI_URL`` env or
     ``http://localhost:7861``.
 
 .. option:: --port <port>
 
-    Daemon port. Default: ``NEBO_PORT`` env or ``7861``.
+    Daemon port. Default: ``NEBO_CLI_PORT`` env or ``7861``.
 
 .. option:: --api-token <token>
 

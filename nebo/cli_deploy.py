@@ -300,7 +300,7 @@ def cmd_deploy(args: argparse.Namespace) -> None:
     print()
     print("To point the `nebo` CLI at this Space (for `nebo logs`,")
     print("`nebo runs list`, etc.), also set:")
-    print(f"  export NEBO_URL={space_url}")
+    print(f"  export NEBO_CLI_URL={space_url}")
     print()
     if not args.api_token:
         print(

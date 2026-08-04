@@ -343,12 +343,12 @@ point for further exploration.
 
 Every read/write subcommand accepts:
 
-- `--url <url>` — daemon URL (defaults to `NEBO_URL` env or `http://localhost:7861`).
+- `--url <url>` — daemon URL (defaults to `NEBO_CLI_URL` env or `http://localhost:7861`).
 - `--port <N>` — daemon port if the daemon isn't at the default.
 - `--api-token <token>` — required if the daemon was started with
   `nebo serve --api-token <X>` and read access is gated.
 
-You can also set `NEBO_URL`, `NEBO_PORT`, `NEBO_API_TOKEN` environment
+You can also set `NEBO_CLI_URL`, `NEBO_CLI_PORT`, `NEBO_API_TOKEN` environment
 variables once instead of passing flags every call.
 
 ## Optional: MCP

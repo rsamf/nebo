@@ -5,7 +5,7 @@ only code outside `nebo/server/` that imports `urllib.request`.
 
 Connection settings resolve in this order:
   1. Explicit kwargs (`url=`, `port=`, `api_token=`).
-  2. Environment (`NEBO_URL`, `NEBO_PORT`, `NEBO_API_TOKEN`).
+  2. Environment (`NEBO_CLI_URL`, `NEBO_CLI_PORT`, `NEBO_API_TOKEN`).
   3. Defaults (`http://localhost:7861`, no token).
 """
 from __future__ import annotations
@@ -27,10 +27,10 @@ DEFAULT_PORT = 7861
 def _resolve_url(url: Optional[str] = None, port: Optional[int] = None) -> str:
     if url:
         return url
-    env_url = os.environ.get("NEBO_URL")
+    env_url = os.environ.get("NEBO_CLI_URL")
     if env_url:
         return env_url
-    p = port if port is not None else int(os.environ.get("NEBO_PORT") or DEFAULT_PORT)
+    p = port if port is not None else int(os.environ.get("NEBO_CLI_PORT") or DEFAULT_PORT)
     return f"http://localhost:{p}"
 
 

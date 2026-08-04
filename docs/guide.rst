@@ -561,7 +561,7 @@ daemon can't see your filesystem:
         --url https://username-space.hf.space \
         --api-token nb_…
 
-``NEBO_URL`` and ``NEBO_API_TOKEN`` env vars work as defaults so
+``NEBO_CLI_URL`` and ``NEBO_API_TOKEN`` env vars work as defaults so
 you don't have to repeat the flags.
 
 
@@ -844,9 +844,9 @@ the Space:
 
 .. code-block:: bash
 
-    export NEBO_URL=https://<user>-nebo-test.hf.space
+    export NEBO_CLI_URL=https://<user>-nebo-test.hf.space
     export NEBO_API_TOKEN=nb_…
-    nebo load path/to/run.nebo --url "$NEBO_URL"
+    nebo load path/to/run.nebo --url "$NEBO_CLI_URL"
 
 The events are read locally and replayed through ``/events`` on the
 remote daemon (the daemon's ``POST /load`` only accepts server-side
