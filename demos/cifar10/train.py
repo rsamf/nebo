@@ -27,10 +27,32 @@ DATA_DIR = Path(__file__).parent / "data"
 nb.md("""
 # CIFAR-10 training
 
-A small CNN trained on real CIFAR-10 (auto-downloaded, ~170 MB). Tagged
-train/val curves, per-class accuracy, per-layer weight distributions, an
-embedding scatter, and misclassified samples you can inspect per epoch.
-Run `sweep.py` to fill the `cifar10/sweep` group for comparison views.
+A ~160k-parameter CNN (three conv blocks, two linear layers) trains on
+real CIFAR-10 — 32x32 photos in ten everyday classes — and logs its
+whole life here.
+
+**How to read this run**
+
+- **`epoch/loss`** carries both curves in one chart via tags: `train`
+  (epoch average over batches) vs `val`. Watch the gap between them —
+  it opens as the model starts memorizing. `train/batch_loss` is the
+  same story at batch resolution, noisy on purpose.
+- **`val/per_class_accuracy`** is a snapshot bar re-emitted every epoch,
+  so it always shows the latest state. Cats and dogs stay hardest —
+  they're where the confusion flows.
+- **`weights/distributions`** overlays each layer's weight histogram:
+  tight init spikes early, spreading as features form.
+- **`val/embeddings`** is a PCA of the penultimate 128-d features after
+  the final epoch, one colored series per class. Clusters that separate
+  are classes the model tells apart; overlaps predict the mistakes in
+  the misclassified stream.
+- **`val/misclassified/<true>-as-<pred>`** image streams collect the
+  errors, named by what happened (`cat-as-dog`), a few per epoch —
+  scrub steps to watch the mistakes change as training progresses.
+
+Run `sweep.py` for four configs side by side in
+[cifar10/sweep](nebo://group/cifar10/sweep) — the comparison view
+overlays their accuracy curves in run colors.
 """)
 nb.ui(view="flat", tracker="step")
 
@@ -55,7 +77,7 @@ class SmallCNN(nn.Module):
         return self.fc2(self.features(x))
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "metrics"})
 def prepare_data(train_size: int, batch_size: int):
     """Download CIFAR-10 and build train/val loaders."""
     tfm = T.Compose([T.ToTensor(), T.Normalize(MEAN, STD)])
@@ -72,7 +94,7 @@ def prepare_data(train_size: int, batch_size: int):
     )
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "text"})
 def build_model(width: int):
     """Construct the SmallCNN."""
     model = SmallCNN(width)
@@ -81,7 +103,7 @@ def build_model(width: int):
     return model
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "metrics"})
 def train_epoch(model, optimizer, train_loader, epoch: int) -> float:
     """One pass over the training set."""
     model.train()
@@ -98,7 +120,7 @@ def train_epoch(model, optimizer, train_loader, epoch: int) -> float:
     return avg
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "metrics"})
 def evaluate(model, test_loader, epoch: int, train_loss: float) -> float:
     """Validation pass: loss/accuracy, per-class bar, misclassified images."""
     model.eval()
@@ -140,7 +162,7 @@ def evaluate(model, test_loader, epoch: int, train_loss: float) -> float:
     return acc
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "metrics"})
 def log_weight_histograms(model, epoch: int) -> None:
     """Per-layer weight distributions, overlaid in one histogram."""
     rng = np.random.default_rng(0)
@@ -153,7 +175,7 @@ def log_weight_histograms(model, epoch: int) -> None:
     nb.log_histogram("weights/distributions", dists, colors=True)
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "metrics"})
 def embedding_scatter(model, test_loader) -> None:
     """PCA of penultimate features on ~1000 val images, one series per class."""
     model.eval()

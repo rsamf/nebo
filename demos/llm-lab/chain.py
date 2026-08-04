@@ -32,10 +32,32 @@ STOPWORDS = set(
 nb.md("""
 # LLM lab — summarize-and-judge chain
 
-A local flan-t5-small summarizes real Wikipedia articles; a judge pass
-scores faithfulness (model yes/no + content-word precision). Hierarchical
-text streams per stage, latency and score lines, a verdict pie, per-category
-bars, and token-length histograms. See AGENT.md for the agent playbook.
+flan-t5-small (~77M parameters, running locally on CPU) reads twelve
+real Wikipedia articles — four each in science, history, technology —
+and every document takes the same trip: **summarize**, then **judge**.
+
+**Follow one document** (steps are the document index — scrub to
+switch):
+
+- `summarize/prompt` and `summarize/output` show exactly what the model
+  was asked and what it wrote. Small models are erratic summarizers:
+  some outputs are sharp one-liners, others loop ("Learn about
+  lithium-ion batteries." ten times over) — that variance is what the
+  judge exists to measure.
+- The judge asks the same model whether the summary matches the article
+  (`judge/verdict`), then blends that yes/no with content-word
+  precision (how much of the summary's substance is really in the
+  article) and a brevity band into `judge/score` (0-100).
+  `judge/rationale` shows the arithmetic behind every verdict.
+- `aggregate` rolls the run up: the verdict mix (pie), mean score per
+  category (bar), and article-vs-summary length histograms — the
+  compression the chain actually achieved.
+
+`experiments.py` runs three prompt templates over the same corpus into
+[llm-lab/prompt-experiments](nebo://group/llm-lab/prompt-experiments);
+AGENT.md then walks a coding agent through comparing them, logging a
+derived chart, setting an alert rule, and publishing its findings as a
+group doc.
 """)
 nb.ui(view="dag", layout="horizontal", tracker="step")
 
@@ -62,7 +84,7 @@ def content_words(text: str) -> set[str]:
             if len(w) > 2 and w not in STOPWORDS}
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "text"})
 def load_corpus(limit: int | None) -> list[dict]:
     """Load the committed Wikipedia-extract corpus."""
     docs = []
@@ -76,7 +98,7 @@ def load_corpus(limit: int | None) -> list[dict]:
     return docs
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "text"})
 def summarize(doc: dict, step: int, template: str, model_name: str) -> str:
     """Generate a summary with the local model."""
     prompt = template.format(text=doc["text"][:3000])
@@ -88,7 +110,7 @@ def summarize(doc: dict, step: int, template: str, model_name: str) -> str:
     return summary
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "text"})
 def judge(doc: dict, summary: str, step: int, model_name: str) -> dict:
     """Score the summary: model yes/no + content-word precision + brevity."""
     t0 = time.perf_counter()
@@ -123,7 +145,7 @@ def judge(doc: dict, summary: str, step: int, model_name: str) -> dict:
             "summary_words": len(summary.split())}
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "metrics"})
 def aggregate(results: list[dict]) -> dict:
     """Corpus-level rollups: verdict pie, per-category bar, length histograms."""
     verdicts = Counter(r["verdict"] for r in results)

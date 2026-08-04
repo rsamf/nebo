@@ -38,12 +38,37 @@ CENTER_COLOR = "#ffffff"   # box-center points
 nb.md("""
 # Vision inference pipeline
 
-Pretrained torchvision models over a bundled set of CC-licensed photos:
-preprocessing, object detection (Faster R-CNN MobileNetV3), semantic
-segmentation (LR-ASPP), and a postprocessing composite for **every**
-sample — scrub the tracker to step through the dataset. Embeddings land
-in a TSNE scatter that grows one point per sample (fit once, then
-transform). CPU-friendly; uses CUDA automatically when available.
+Three pretrained torchvision models process thirty real photos (street
+scenes, animals, food, rooms — see data/ATTRIBUTION.md), one sample per
+step. Scrub the tracker, or click any point in the TSNE scatter, and
+every stage card jumps to that photo.
+
+**What each stage shows**
+
+- `preprocess` — EXIF-corrected RGB input, capped at 640 px
+  (`stages/input`).
+- `detect` — Faster R-CNN MobileNetV3 draws every raw detection above
+  0.3 confidence: one box color per class, white dots at box centers
+  (`stages/detections`). `objects` and `mean_confidence` track it per
+  step; `detect/summary` says it in words ("2 person, 1 bicycle").
+- `segment` — LR-ASPP labels every pixel with one of 21 VOC classes;
+  class-tinted masks overlay the frame (`stages/segmentation`). Food
+  and interior shots often show no mask at all — VOC has no pizza
+  class — and `coverage` drops to zero there.
+- `postprocess` — keeps only detections above the run's `conf`
+  threshold and composites the story: background dimmed to the
+  segmentation foreground, boxes, and centers (`stages/final`).
+  `box_fg_agreement` measures how much the two models agree — the
+  fraction of detected box area the segmenter also calls foreground.
+- `embed` — a third MobileNet pools each photo into a 960-d vector;
+  `embeddings/tsne` grows one point per sample (openTSNE: fit on the
+  first twelve, transform after), labeled by the photo's dominant
+  detected class. Animals cluster away from street scenes — click an
+  outlier to see why.
+- `summarize` — the dataset census: detections per class (bar),
+  dominant class per photo (pie), confidence distributions (histogram).
+
+CPU-friendly; uses CUDA automatically when available.
 """)
 nb.ui(view="dag", tracker="step")
 
@@ -88,7 +113,7 @@ def _tsne_fit_and_emit() -> None:
         _emit_tsne_point(s, label, xy)
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "text"})
 def load_models(device: str) -> dict:
     """Load the three pretrained models onto the target device."""
     from torchvision.models import MobileNet_V3_Large_Weights, mobilenet_v3_large
@@ -123,7 +148,7 @@ def load_models(device: str) -> dict:
     return models
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "text"})
 def load_dataset(limit: int | None) -> list[Path]:
     """List the bundled sample images."""
     paths = sorted(DATA_DIR.glob("*.jpg"))
@@ -264,7 +289,7 @@ def postprocess(
     return dominant
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "metrics"})
 def embed(models: dict, pil: Image.Image, dominant: str, step: int, warmup: int) -> None:
     """Pool mobilenet features; TSNE fit-once then transform per sample."""
     t0 = time.perf_counter()
@@ -285,7 +310,7 @@ def embed(models: dict, pil: Image.Image, dominant: str, step: int, warmup: int)
     nb.log_line("latency", stamp(t0), step=step)
 
 
-@nb.fn(depends_on=[postprocess])
+@nb.fn(depends_on=[postprocess], ui={"default_tab": "metrics"})
 def summarize() -> dict:
     """Dataset-level rollups from the per-sample accumulator."""
     class_totals: Counter = Counter()

@@ -24,9 +24,33 @@ DATA_DIR = Path(__file__).parent / "data"
 nb.md("""
 # Night-sky source extraction
 
-A real astronomy pipeline over DSS2 survey tiles: background estimation,
-threshold detection, photometry, and a catalog — with every detection
-annotated on the tile (points, circles, boxes, polygons, bitmask).
+Classic astronomy source extraction over six real Digitized Sky Survey
+tiles (the Pleiades, Orion's belt, M13, M67, Sagittarius, Cygnus) — the
+same algorithm family real survey pipelines use, in plain numpy/scipy.
+
+**The pipeline, tile by tile** (one step per tile — scrub to switch):
+
+1. `estimate_background` — a median filter models the sky glow; the
+   residual's MAD gives each tile's noise level (`background/sigma`).
+2. `detect_sources` — pixels brighter than `k x sigma` group into
+   sources, classified as `point` (ordinary stars), `extended`
+   (clusters and nebulosity), or `saturated` (blown-out bright stars).
+3. `photometry` — instrumental magnitudes (lower = brighter, astronomer
+   convention) and aperture radii. `photometry/magnitudes` overlays
+   every tile's distribution: dense fields like M13 pile up at the
+   faint end.
+4. `annotate_tile` — the findings drawn on the tile: **points** are
+   centroids, **circles** photometry apertures, **boxes** saturated
+   stars, **polygon outlines** extended sources, and the **bitmask
+   tint** is the raw detection mask. The m13 tile reliably shows all
+   five kinds at once.
+5. `build_catalog` — the run's census: sources per tile (bar) and the
+   class mix (pie).
+
+Run `pipeline.py --populate` to compare k = 3, 4, 5 side by side in
+[night-sky/threshold-study](nebo://group/night-sky/threshold-study):
+lower thresholds dig deeper but admit noise — watch the source counts
+and the faint tail of the magnitude histograms grow as k drops.
 """)
 nb.ui(view="dag", layout="horizontal", minimap=True, tracker="step")
 
@@ -51,7 +75,7 @@ def source_outline(mask: np.ndarray, cy: float, cx: float, offy: float, offx: fl
     return verts
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "text"})
 def load_tile(path: str, step: int) -> np.ndarray:
     """Load one survey tile as grayscale float."""
     img = np.asarray(Image.open(path).convert("L"), dtype=np.float64)
@@ -59,7 +83,7 @@ def load_tile(path: str, step: int) -> np.ndarray:
     return img
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "metrics"})
 def estimate_background(img: np.ndarray, step: int):
     """Median-filter sky background + robust noise estimate (MAD)."""
     bg = ndimage.median_filter(img, size=31)
@@ -69,7 +93,7 @@ def estimate_background(img: np.ndarray, step: int):
     return bg, max(sigma, 0.5)
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "metrics"})
 def detect_sources(img: np.ndarray, bg: np.ndarray, sigma: float, k: float,
                    tile_name: str, step: int):
     """Label pixels above k*sigma; classify point / extended / saturated."""
@@ -108,7 +132,7 @@ def detect_sources(img: np.ndarray, bg: np.ndarray, sigma: float, k: float,
     return sources, mask
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "metrics"})
 def photometry(tile_name: str, sources: list[dict], step: int) -> list[dict]:
     """Instrumental magnitudes + aperture radii; feeds the shared catalog."""
     for s in sources:
@@ -150,7 +174,7 @@ def annotate_tile(img: np.ndarray, sources: list[dict], mask: np.ndarray,
     nb.log_image(img.astype(np.uint8), name=f"tiles/{tile_name}", step=step, **kwargs)
 
 
-@nb.fn(depends_on=[photometry])
+@nb.fn(depends_on=[photometry], ui={"default_tab": "metrics"})
 def build_catalog() -> list[dict]:
     """Aggregate every tile's sources (reads CATALOG — declared edge)."""
     kinds = Counter(s["kind"] for s in CATALOG)
