@@ -45,7 +45,7 @@ sample — scrub the tracker to step through the dataset. Embeddings land
 in a TSNE scatter that grows one point per sample (fit once, then
 transform). CPU-friendly; uses CUDA automatically when available.
 """)
-nb.ui(view="flat", tracker="step")
+nb.ui(view="dag", tracker="step")
 
 # Per-run accumulators (cleared by run_pipeline). summarize() reads STATS
 # via depends_on — data flows through module state, not arguments.
@@ -179,15 +179,16 @@ def detect(models: dict, arr: np.ndarray, tensor: torch.Tensor, step: int) -> di
             nb.labels.Boxes(boxes, class_color(name))
             for name, boxes in sorted(by_class.items())
         ]
+        kwargs: dict = {}
         if groups:
             centers = [
                 [(x1 + x2) / 2, (y1 + y2) / 2]
                 for x1, y1, x2, y2 in dets["boxes"].tolist()
             ]
-            nb.log_image(
-                arr, name="stages/detections", step=step,
-                boxes=groups, points=nb.labels.Points(centers, CENTER_COLOR),
-            )
+            kwargs = {"boxes": groups, "points": nb.labels.Points(centers, CENTER_COLOR)}
+        # Always log the card — a step with no detections still shows the
+        # frame, keeping every step scrubbable.
+        nb.log_image(arr, name="stages/detections", step=step, **kwargs)
     return dets
 
 
@@ -210,8 +211,10 @@ def segment(models: dict, pil: Image.Image, arr: np.ndarray, step: int) -> np.nd
             for c in np.unique(seg)
             if c != 0 and (seg == c).mean() >= 0.01
         ]
-        if masks:
-            nb.log_image(arr, name="stages/segmentation", step=step, bitmasks=masks)
+        # Always log the card — LR-ASPP's 21 VOC classes cover none of e.g.
+        # the food shots, and a maskless frame still belongs in the scrub.
+        nb.log_image(arr, name="stages/segmentation", step=step,
+                     **({"bitmasks": masks} if masks else {}))
     return seg
 
 
