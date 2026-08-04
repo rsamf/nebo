@@ -129,7 +129,7 @@ def photometry(tile_name: str, sources: list[dict], step: int) -> list[dict]:
     return sources
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "images"})
 def annotate_tile(img: np.ndarray, sources: list[dict], mask: np.ndarray,
                   tile_name: str, step: int) -> None:
     """One image carrying all five nb.labels kinds, each in its own color."""

@@ -26,7 +26,8 @@ import nebo as nb
 DATA_DIR = Path(__file__).parent / "data"
 MAX_SIDE = 640
 DETECT_MIN_SCORE = 0.3     # raw detections shown on the detect stage card
-STAGE_CARD_EVERY = 8       # intermediate stage images every Nth sample
+STAGE_CARD_EVERY = 1       # intermediate stage images every Nth sample (1 = all:
+                           # every stage card is step-addressable, ~60 MB/run)
 PALETTE = [
     "#22d3ee", "#a3e635", "#f87171", "#f472b6", "#fbbf24",
     "#818cf8", "#34d399", "#fb923c", "#e879f9", "#94a3b8",
@@ -132,7 +133,7 @@ def load_dataset(limit: int | None) -> list[Path]:
     return paths
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "images"})
 def preprocess(path: Path, step: int):
     """EXIF-orient, force RGB, cap the longest side at MAX_SIDE."""
     t0 = time.perf_counter()
@@ -147,7 +148,7 @@ def preprocess(path: Path, step: int):
     return pil, arr, tensor
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "images"})
 def detect(models: dict, arr: np.ndarray, tensor: torch.Tensor, step: int) -> dict:
     """Faster R-CNN detection; raw boxes >= DETECT_MIN_SCORE."""
     t0 = time.perf_counter()
@@ -190,7 +191,7 @@ def detect(models: dict, arr: np.ndarray, tensor: torch.Tensor, step: int) -> di
     return dets
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "images"})
 def segment(models: dict, pil: Image.Image, arr: np.ndarray, step: int) -> np.ndarray:
     """LR-ASPP semantic segmentation, upsampled to the image resolution."""
     t0 = time.perf_counter()
@@ -214,7 +215,7 @@ def segment(models: dict, pil: Image.Image, arr: np.ndarray, step: int) -> np.nd
     return seg
 
 
-@nb.fn()
+@nb.fn(ui={"default_tab": "images"})
 def postprocess(
     arr: np.ndarray, dets: dict, seg: np.ndarray, conf: float, step: int
 ) -> str:
