@@ -49,6 +49,7 @@ html_theme = 'sphinxawesome_theme'
 html_logo = '_static/logo.png'
 html_favicon = '_static/logo.png'
 html_static_path = ['_static']
+html_css_files = ['custom.css']
 html_extra_path = ["robots.txt"]
 sitemap_url_scheme = "{link}"
 html_context = {

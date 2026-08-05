@@ -1,0 +1,17 @@
+/* Nebo docs — local overrides on top of the sphinxawesome theme. */
+
+/* The theme tags the header and sidebar logo with Tailwind's `dark:invert`,
+   which assumes a monochrome mark and flips it white in dark mode. The Nebo
+   logo is a full-color mark already designed to read on both backgrounds, so
+   inverting it corrupts the brand colors.
+   `_templates/header.html` drops the class outright since we own that file.
+   The sidebar logo comes from the theme's own `sidebar.html`, which also
+   carries the sidebar nav logic — neutralize it here rather than forking a
+   45-line template against future theme upgrades.
+   Specificity note: the theme's rule is `.dark\:invert:is(.dark *)` = (0,2,0),
+   so the `.dark` prefix below is required to win at (0,2,1). Resetting only
+   `--tw-invert` (rather than `filter: none`) leaves any other theme filters on
+   the element intact. */
+.dark img[alt="Logo"] {
+  --tw-invert: initial;
+}
