@@ -7,7 +7,7 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'Nebo'
-copyright = '2025, Richard Franklin'
+copyright = '2026, Richard Franklin'
 author = 'Richard Franklin'
 
 import os
