@@ -52,7 +52,11 @@ html_static_path = ['_static']
 html_extra_path = ["robots.txt"]
 sitemap_url_scheme = "{link}"
 html_context = {
-    'og_description': 'Nebo is a modern multi-modal logger for ML experiments and data pipelines, built for humans and AI agents. View remotely with a mobile-first UI, track experiments with a local-first and free logging SDK, and run autonomous experiments with AI agents.'
+    'og_description': 'Nebo is a modern multi-modal logger for ML experiments and data pipelines, built for humans and AI agents. View remotely with a mobile-first UI, track experiments with a local-first and free logging SDK, and run autonomous experiments with AI agents.',
+    # Social card. Must be an absolute URL — crawlers do not resolve
+    # relative og:image paths against the page.
+    'og_image': html_baseurl + '_static/nebo-social-preview.png',
+    'og_image_alt': 'Nebo — open-source, modern experiment tracking built for humans and AI agents',
 }
 
 pygments_style = "default"

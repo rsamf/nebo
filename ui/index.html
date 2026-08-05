@@ -5,6 +5,23 @@
     <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Nebo</title>
+
+    <!-- Social card. The bundle is served from the site root by both the
+         daemon's StaticFiles mount and `nebo deploy` (HF Spaces), so the
+         image resolves without knowing the deployment host. -->
+    <meta name="description" content="Nebo is a modern logging SDK for multi-modal data — track experiments with function-level logs and inferred DAGs, built for humans and AI agents." />
+    <meta property="og:title" content="Nebo" />
+    <meta property="og:description" content="Nebo is a modern logging SDK for multi-modal data — track experiments with function-level logs and inferred DAGs, built for humans and AI agents." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/nebo-social-preview.png" />
+    <meta property="og:image:alt" content="Nebo — open-source, modern experiment tracking built for humans and AI agents" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Nebo" />
+    <meta name="twitter:description" content="Nebo is a modern logging SDK for multi-modal data — track experiments with function-level logs and inferred DAGs, built for humans and AI agents." />
+    <meta name="twitter:image" content="/nebo-social-preview.png" />
+    <meta name="twitter:image:alt" content="Nebo — open-source, modern experiment tracking built for humans and AI agents" />
   </head>
   <body class="bg-background text-foreground antialiased">
     <div id="root"></div>
