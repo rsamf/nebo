@@ -22,6 +22,12 @@ dependencies = [
     "websockets>=11.0"
 ]
 
+[project.urls]
+Homepage = "https://nebo.rsamf.com"
+Documentation = "https://nebo.rsamf.com/docs"
+Repository = "https://github.com/rsamf/nebo"
+Issues = "https://github.com/rsamf/nebo/issues"
+
 [project.optional-dependencies]
 deploy = ["huggingface_hub>=0.20.0"]
 

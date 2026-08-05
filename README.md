@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/graphbookai/nebo/main/docs/_static/logo.png" alt="Nebo" width="120" />
+<img src="https://raw.githubusercontent.com/rsamf/nebo/main/docs/_static/logo.png" alt="Nebo" width="120" />
 
 <h1>Nebo</h1>
 
@@ -13,17 +13,17 @@
 <p>
   <a href="https://pypi.org/project/nebo/"><img src="https://img.shields.io/pypi/v/nebo.svg" alt="PyPI" /></a>
   <a href="https://pypi.org/project/nebo/"><img src="https://img.shields.io/pypi/pyversions/nebo.svg" alt="Python versions" /></a>
-  <a href="https://github.com/graphbookai/nebo/actions/workflows/ci.yml"><img src="https://github.com/graphbookai/nebo/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://github.com/graphbookai/nebo/blob/main/LICENSE"><img src="https://img.shields.io/github/license/graphbookai/nebo.svg" alt="License: MIT" /></a>
-  <img src="https://img.shields.io/endpoint?url=https://gittokens.rsamf.com/badge/graphbookai/nebo" alt="tokens" />
+  <a href="https://github.com/rsamf/nebo/actions/workflows/ci.yml"><img src="https://github.com/rsamf/nebo/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/rsamf/nebo/blob/main/LICENSE"><img src="https://img.shields.io/github/license/rsamf/nebo.svg" alt="License: MIT" /></a>
+  <img src="https://img.shields.io/endpoint?url=https://gittokens.rsamf.com/badge/rsamf/nebo" alt="tokens" />
 </p>
 
 <p>
-  <a href="https://docs.graphbook.ai/nebo"><b>Documentation</b></a>
+  <a href="https://nebo.rsamf.com/docs"><b>Documentation</b></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/graphbookai/nebo/tree/main/examples"><b>Examples</b></a>
+  <a href="https://github.com/rsamf/nebo/tree/main/examples"><b>Examples</b></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/graphbookai/nebo/issues"><b>Issues</b></a>
+  <a href="https://github.com/rsamf/nebo/issues"><b>Issues</b></a>
 </p>
 
 </div>

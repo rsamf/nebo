@@ -1,4 +1,4 @@
-.. _repository: https://github.com/graphbookai/nebo
+.. _repository: https://github.com/rsamf/nebo
 
 .. _contributing:
 

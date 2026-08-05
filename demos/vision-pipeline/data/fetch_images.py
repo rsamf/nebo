@@ -18,7 +18,7 @@ from pathlib import Path
 
 OUT = Path(__file__).parent
 API = "https://commons.wikimedia.org/w/api.php"
-UA = {"User-Agent": "nebo-demo/1.0 (https://github.com/graphbookai/nebo)"}
+UA = {"User-Agent": "nebo-demo/1.0 (https://github.com/rsamf/nebo)"}
 
 # Curated object-rich Commons files: streets, animals, rooms, vehicles,
 # people, food. Existence and license are validated at fetch time; entries

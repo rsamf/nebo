@@ -98,7 +98,7 @@ Installing from source requires uv_ and Node.js_.
 
 .. code-block:: bash
 
-    git clone https://github.com/graphbookai/nebo.git
+    git clone https://github.com/rsamf/nebo.git
     cd nebo
     uv sync --all-groups
 
