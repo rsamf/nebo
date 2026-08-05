@@ -1,3 +1,3 @@
 User-agent: *
 
-Sitemap: https://docs.graphbook.ai/nebo/sitemap.xml
+Sitemap: https://nebo.rsamf.com/docs/sitemap.xml

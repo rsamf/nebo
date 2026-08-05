@@ -1,4 +1,4 @@
-name: Trigger graphbook docs deploy
+name: Deploy docs to GitHub Pages
 
 on:
   workflow_run:
@@ -6,28 +6,74 @@ on:
     types: [completed]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
 jobs:
-  dispatch:
+  build:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Mint graphbook app token
-        id: graphbook_token
-        uses: actions/create-github-app-token@v1
+      - uses: actions/checkout@v4
         with:
-          app-id: ${{ secrets.NEBO_DOCS_APP_ID }}
-          private-key: ${{ secrets.NEBO_DOCS_APP_PRIVATE_KEY }}
-          owner: graphbookai
-          repositories: graphbook
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
-      - name: Dispatch nebo-docs-updated to graphbook
-        env:
-          GH_TOKEN: ${{ steps.graphbook_token.outputs.token }}
-          NEBO_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Build Sphinx docs
+        run: uv run make -C docs html
+
+      # The Pages site serves at the nebo.rsamf.com root; docs live under
+      # /docs so the root stays free for a future landing page. robots.txt
+      # must sit at the domain root to be honored.
+      - name: Assemble site
         run: |
-          gh api \
-            --method POST \
-            -H "Accept: application/vnd.github+json" \
-            /repos/graphbookai/graphbook/dispatches \
-            -f "event_type=nebo-docs-updated" \
-            -f "client_payload[nebo_sha]=${NEBO_SHA}"
+          mkdir -p site/docs
+          cp -r docs/_build/html/. site/docs/
+          cp docs/robots.txt site/robots.txt
+          cat > site/index.html <<'EOF'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta http-equiv="refresh" content="0; url=/docs/">
+            <link rel="canonical" href="https://nebo.rsamf.com/docs/">
+            <title>Nebo</title>
+          </head>
+          <body><p>Redirecting to <a href="/docs/">nebo.rsamf.com/docs</a>&hellip;</p></body>
+          </html>
+          EOF
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

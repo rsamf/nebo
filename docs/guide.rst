@@ -915,4 +915,4 @@ Complete Example: Data Processing Pipeline
 More Examples
 =============
 
-Runnable examples live in the `examples <https://github.com/graphbookai/nebo/tree/main/examples>`_ directory of the repository.
+Runnable examples live in the `examples <https://github.com/rsamf/nebo/tree/main/examples>`_ directory of the repository.
