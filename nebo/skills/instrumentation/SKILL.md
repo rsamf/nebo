@@ -7,7 +7,7 @@ description: Use when writing Python code that needs to be instrumented with neb
 
 ## Overview
 
-Nebo is a modern logging SDK for multi-modal data. You decorate functions with `@nb.fn()`, call `nb.log_text()` inside them, and nebo automatically infers a DAG from data flow, captures metrics, tracks progress, and exposes everything via MCP tools and a web UI.
+Nebo is a modern logging SDK for experiment tracking and visualizing data pipelines, supporting multi-modal data. Nebo captures metrics and media, tracks progress, and exposes everything via CLI, MCP tools and a web UI.
 
 **Core principle:** Decorate every meaningful step as `@nb.fn()`. Edges between nodes are inferred from data flow — no manual wiring. Call `nb.md()` and `nb.ui()` at module level before any decorated functions execute — they are declarative (no run is created until the first real log/metric event) and compose with `nb.start_run()`: metadata declared outside a run applies to every run the script opens; metadata called inside a run applies to that run only.
 
@@ -81,7 +81,6 @@ def train(dataset, model, epochs=100, lr=0.01):
             img = visualize(model)
             nb.log_image(img, name="weights", step=epoch)
 
-@nb.fn()
 def run_experiment():
     dataset = create_dataset()
     model = create_model()
@@ -111,6 +110,8 @@ for cfg in [{"lr": 0.001}, {"lr": 0.01}, {"lr": 0.1}]:
 ## Pattern 2: DAG-Structured Pipeline
 
 **When:** ETL, data processing, any sequence of transforms with branching.
+
+You decorate functions with `@nb.fn()`, call `nb.log_*` inside them, and nebo automatically infers a DAG from data flow
 
 ```python
 import nebo as nb
@@ -150,7 +151,6 @@ def generate_report(clean, raw):
     nb.log_text("summary", f"summary — clean: {len(clean)} | raw: {len(raw)}")
     return {"clean": len(clean), "raw": len(raw)}
 
-@nb.fn()
 def run_pipeline():
     raw = load_data()
     normed = normalize(raw)

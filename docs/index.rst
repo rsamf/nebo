@@ -3,7 +3,7 @@ Nebo
 
 .. rst-class:: lead
 
-    A modern logging SDK for multi-modal data.
+    A modern, local-first logging SDK for multi-modal experiment data built for humans and AI agents.
 
 .. code-block:: python
 
@@ -20,7 +20,27 @@ Nebo
         loading="lazy">
     </iframe>
 
-Nebo is a modern logging SDK that lets you track experiments containing multi-modal data (text, images, audio) and inspect metrics with function-level granularity.
+Nebo is a light-weight, multimodal logging SDK that lets you track experiments without you needing to create an account.
+
+.. code-block:: python
+
+    import math
+
+    for step in range(50):
+        nb.log_line("sine", math.sin(step / 5))
+        nb.log_line("cosine", math.cos(step / 5))
+
+.. raw:: html
+
+    <iframe
+        src="https://rsamf-nebo-demos.hf.space/?run=docs-index-pipeline&flat&metrics"
+        width="100%" height="400"
+        style="margin-top: 10px; border: 1px solid var(--color-border, #e5e7eb); border-radius: 8px;"
+        loading="lazy">
+    </iframe>
+
+Nebo also supports function-level logging which allows you to decorate functions with ``@nb.fn()``, and nebo automatically infers the DAG from your runtime calls.
+and inspect metrics with function-level granularity.
 
 .. code-block:: python
 
@@ -49,62 +69,36 @@ Nebo is a modern logging SDK that lets you track experiments containing multi-mo
 .. raw:: html
 
     <iframe
-        src="https://rsamf-nebo-demos.hf.space/?run=docs-index-multi-modal"
+        src="https://rsamf-nebo-demos.hf.space/?run=docs-index-multi-modal&dag"
         width="100%" height="500"
         style="margin-top: 10px; border: 1px solid var(--color-border, #e5e7eb); border-radius: 8px;"
         loading="lazy">
     </iframe>
 
 
-Following the Tensorboard model, Nebo is local-first, so you don't need to start another separate service, or worse, create an account to log data.
-Each run is stored in one .nebo file, a self-contained file format for simplicity, so that managing them is easy.
+Why Nebo?
+*********
 
+*
+    Following the Tensorboard model, Nebo is **local-first**, so you don't need to start another separate service, or worse, create an account to log data.
+    Each run is stored in one .nebo file, a self-contained file format for simplicity, so that managing them is easy.
 
-Nebo also supports function-level logging which allows you to decorate functions with ``@nb.fn()``, and nebo automatically infers the DAG from your runtime calls.
+*
+    The UI is mobile-first supporting live viewing of metrics while you walk away from your desk.
 
-.. code-block:: python
+*
+    Nebo agent skills are released with every version and can be installed with ``nebo skills install``
+    allowing coding agents to understand the SDK, monitor the logs, and author its own logs. Nebo allows for fully autonomous experiments with your favorite coding agent.
 
-    @nb.fn(ui={"default_tab": "metrics"})
-    def load_data():
-        records = [{"id": i, "value": i * 0.5} for i in range(200)]
-        nb.log_text("status", f"Loaded {len(records)} records")
-        for r in records:
-            nb.log_line("value", r["value"])
-        return records
+*
+    Nebo introduces function-level logging, ideal for visualizing the flow of inputs and outputs across DAG- or pipeline-like code.
 
-    @nb.fn(ui={"default_tab": "metrics"})
-    def evaluate(records):
-        for r in records:
-            if r["value"] < 50:
-                nb.log_line("value", r["value"], tags=["<50"])
-                nb.log_text("findings", f"Found {r['value']} is under 50")
-            else:
-                nb.log_line("value", r["value"], tags=[">=50"])
+*
+    You can also easily deploy Nebo as a remote service and emit logs to it. An easy one-command `nebo deploy` brings your logs to Hugging Face Spaces.
 
-    @nb.fn()
-    def process(records):
-        for r in nb.track(records, name="processing"):
-            nb.log_line("value", r["value"]**2)
+*
+    See the full features below...
 
-    def run():
-        data = load_data()
-        evaluate(data)
-        process(data)
-
-    if __name__ == "__main__":
-        run()
-
-.. raw:: html
-
-    <iframe
-        src="https://rsamf-nebo-demos.hf.space/?run=docs-index-pipeline"
-        width="100%" height="500"
-        style="margin-top: 10px; border: 1px solid var(--color-border, #e5e7eb); border-radius: 8px;"
-        loading="lazy">
-    </iframe>
-
-Text, metrics, images, and audio are captured and surfaced through a web UI, an MCP server, and a nebo CLI that comes with agent skills.
-The UI is mobile-first supporting live viewing of metrics while you walk away from your desk.
 
 Features
 ********
@@ -119,6 +113,7 @@ Features
 * **Hugging Face Spaces deploy**: ``nebo deploy`` ships the daemon to a Space with shared-secret auth and configurable public/private read+write modes
 * **Decorator-based**: Add ``@nb.fn()`` to functions or classes for function-level logging
 * **Automatic DAG inference**: Edges are created from data flow between decorated functions
+* **Groups**: Organize your runs into a tree of groups (e.g. projects), like a filesystem
 
 .. toctree::
    :caption: Docs
