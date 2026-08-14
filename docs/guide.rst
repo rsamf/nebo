@@ -544,6 +544,18 @@ same directory — the daemon refuses to start if they resolve to the same
 path (nesting under the logdir is fine). Env mirrors: ``NEBO_REMOTE`` and
 ``NEBO_REMOTE_EPHEMERAL``.
 
+``--logdir`` can also be a Hugging Face repo, which decouples your runs
+from whatever machine is serving them:
+
+.. code-block:: bash
+
+    nebo serve --logdir hf://datasets/acme/runs
+
+The daemon reads ``.nebo`` files straight out of the repo, so it can be
+restarted, moved, or hosted on a Space that sleeps, and the same runs come
+back every time. See :ref:`bucket-workspaces` in the CLI reference for
+credentials and how to publish runs there.
+
 To load a ``.nebo`` file into a *local* daemon for viewing and Q&A:
 
 .. code-block:: bash

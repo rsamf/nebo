@@ -248,13 +248,39 @@ class TestOpsAndAccessors:
     def test_watch_files_roundtrip(self, tmp_path):
         c = _mk(tmp_path)
         try:
-            c.enqueue(("watch_file", "/tmp/a.nebo", "r1", 100, 120, 5.0, True))
-            c.enqueue(("watch_file", "/tmp/a.nebo", "r1", 200, 220, 6.0, False))
+            c.enqueue(("watch_file", "/tmp/a.nebo", "r1", 100, 120, 5.0, True, None))
+            c.enqueue(("watch_file", "/tmp/a.nebo", "r1", 200, 220, 6.0, False, "blob1"))
             assert c.flush()
             wf = c.get_watch_files()
             assert wf["/tmp/a.nebo"]["offset"] == 200
             assert wf["/tmp/a.nebo"]["run_id"] == "r1"
             assert wf["/tmp/a.nebo"]["shallow"] is False
+            assert wf["/tmp/a.nebo"]["token"] == "blob1"
+        finally:
+            c.close()
+
+    def test_watch_file_drop_forgets_the_offset(self, tmp_path):
+        """A republished bucket deletes paths; a stale offset would make a
+        reappearing path resume mid-file."""
+        c = _mk(tmp_path)
+        try:
+            c.enqueue(("watch_file", "/tmp/a.nebo", "r1", 200, 220, 6.0, False, None))
+            c.enqueue(("watch_file", "/tmp/b.nebo", "r2", 10, 20, 6.0, True, None))
+            assert c.flush()
+            c.enqueue(("watch_file_drop", "/tmp/a.nebo"))
+            assert c.flush()
+            wf = c.get_watch_files()
+            assert "/tmp/a.nebo" not in wf
+            assert "/tmp/b.nebo" in wf
+        finally:
+            c.close()
+
+    def test_watch_file_drop_of_unknown_path_is_a_noop(self, tmp_path):
+        c = _mk(tmp_path)
+        try:
+            c.enqueue(("watch_file_drop", "/tmp/never-seen.nebo"))
+            assert c.flush()
+            assert c.get_watch_files() == {}
         finally:
             c.close()
 

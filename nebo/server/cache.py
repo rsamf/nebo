@@ -43,6 +43,8 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from nebo.server.workspace import normalize_workspace, read_frame_bytes
+
 try:
     import fcntl
 except ImportError:  # Windows: no flock — the single-owner guard degrades
@@ -50,7 +52,7 @@ except ImportError:  # Windows: no flock — the single-owner guard degrades
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "6"  # v6: logs table renamed to texts, level column dropped
+SCHEMA_VERSION = "7"  # v7: watch_files.token (content marker for replacements)
 
 DEFAULT_RAM_BUDGET_MB = 384
 BYTES_PER_POINT = 372  # measured: dict-per-point daemon entry overhead
@@ -116,14 +118,19 @@ CREATE UNIQUE INDEX ux_sig_events_row ON significant_events(
 CREATE TABLE media_blobs (media_id TEXT PRIMARY KEY, blob BLOB);
 CREATE TABLE watch_files (
   path TEXT PRIMARY KEY, run_id TEXT, offset INTEGER, size INTEGER, mtime REAL,
-  shallow INTEGER NOT NULL DEFAULT 0
+  shallow INTEGER NOT NULL DEFAULT 0, token TEXT
 );
 """
 
 
 def resolve_cache_path(logdir: Optional[Path | str]) -> Path:
-    """Cache db path for a logdir: ~/.nebo/cache/<sha1(abs path)[:16]>.db."""
-    key = str(Path(logdir).resolve()) if logdir is not None else ""
+    """Cache db path for a logdir: ~/.nebo/cache/<sha1(workspace key)[:16]>.db.
+
+    The key comes from `normalize_workspace` — an absolute path for a local
+    logdir, the canonical URI for a bucket. `RunCache` must derive its stored
+    `meta.logdir` the same way or `_meta_matches` drops the whole database.
+    """
+    key = normalize_workspace(logdir)
     digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
     return Path.home() / ".nebo" / "cache" / f"{digest}.db"
 
@@ -265,7 +272,9 @@ class RunCache:
         media_lru_mb: int = DEFAULT_MEDIA_LRU_MB,
     ) -> None:
         self._path = Path(path)
-        self._logdir = str(Path(logdir).resolve()) if logdir is not None else ""
+        # Must match resolve_cache_path's key exactly — `_meta_matches` drops
+        # and recreates the database when the stored logdir differs.
+        self._logdir = normalize_workspace(logdir)
         self._media_lru_mb = media_lru_mb
         self._queue: queue.Queue[Any] = queue.Queue()
         self._thread: Optional[threading.Thread] = None
@@ -570,17 +579,21 @@ class RunCache:
                 (media_id, blob),
             )
         elif kind == "watch_file":
-            _, path, run_id, offset, size, mtime, shallow = op
+            _, path, run_id, offset, size, mtime, shallow, token = op
             conn.execute(
                 "INSERT INTO watch_files"
-                " (path, run_id, offset, size, mtime, shallow)"
-                " VALUES (?, ?, ?, ?, ?, ?)"
+                " (path, run_id, offset, size, mtime, shallow, token)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT(path) DO UPDATE SET"
                 " run_id=excluded.run_id, offset=excluded.offset,"
                 " size=excluded.size, mtime=excluded.mtime,"
-                " shallow=excluded.shallow",
-                (path, run_id, offset, size, mtime, int(shallow)),
+                " shallow=excluded.shallow, token=excluded.token",
+                (path, run_id, offset, size, mtime, int(shallow), token),
             )
+        elif kind == "watch_file_drop":
+            # The file is gone from the workspace; forget its offset so a
+            # path that reappears is registered from its header again.
+            conn.execute("DELETE FROM watch_files WHERE path=?", (op[1],))
         else:
             raise ValueError(f"unknown cache op kind: {kind!r}")
 
@@ -942,17 +955,20 @@ class RunCache:
     @staticmethod
     def _read_media_ref(path: str, offset: int, length: int) -> Optional[bytes]:
         """Read one frame [type][u32 size][msgpack payload] from a .nebo file
-        and extract its media bytes (base64 str in v3 files, bin in v4)."""
+        and extract its media bytes (base64 str in v3 files, bin in v4).
+
+        `path` is a self-describing URI — an absolute path for a local
+        workspace, an ``hf://`` URI for a bucket one — because the reference
+        was persisted long ago and no workspace is in hand here.
+        """
         import base64
         import struct as _struct
 
         import msgpack
 
         try:
-            with open(path, "rb") as f:
-                f.seek(offset)
-                frame = f.read(length)
-            if len(frame) < 5:
+            frame = read_frame_bytes(path, offset, length)
+            if frame is None or len(frame) < 5:
                 return None
             size = _struct.unpack(">I", frame[1:5])[0]
             payload = msgpack.unpackb(frame[5:5 + size], raw=False)
@@ -974,6 +990,7 @@ class RunCache:
                 "size": r["size"],
                 "mtime": r["mtime"],
                 "shallow": bool(r["shallow"]),
+                "token": r["token"],
             }
             for r in rows
         }

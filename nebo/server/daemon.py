@@ -27,6 +27,11 @@ from nebo.server.cache import (
     media_id_for,
 )
 from nebo.server.protocol import MessageType, decode_batch
+from nebo.server.workspace import (
+    is_remote_uri,
+    normalize_workspace,
+    open_workspace,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -374,7 +379,11 @@ class DaemonState:
         # them to `_remote_dir`; "remote-ephemeral" accepts without persisting.
         self.mode: str = "remote-ephemeral"
         self._remote_dir: Optional[Path] = None
-        self._logdir: Optional[Path] = None
+        # The workspace root (--logdir): a local directory or an hf:// bucket.
+        # Set in every mode — it anchors the cache identity and meta/ — while
+        # `_watch` separately controls whether the watcher tails it.
+        self.workspace: Optional[Any] = None
+        self._watch: bool = True
         # Set by the lifespan when the directory watcher starts. Read-access
         # deep-ingest of shallow (header-only) runs delegates to it.
         self._watcher: Optional[Any] = None
@@ -1637,15 +1646,36 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
         state.mode = "remote"
         if state._remote_dir is None:
             if remote.strip().lower() in ("1", "true", "yes"):
-                base = Path(logdir) if logdir else Path(".nebo")
+                # The writer appends to an open stream, so it is always a
+                # local directory — a bucket logdir has no <logdir>/remote/.
+                base = (
+                    Path(logdir) if logdir and not is_remote_uri(logdir)
+                    else Path(".nebo")
+                )
                 state._remote_dir = base / "remote"
+            elif is_remote_uri(remote):
+                raise RuntimeError(
+                    "nebo daemon: NEBO_REMOTE must be a local directory, not a "
+                    f"bucket URI (got {remote}). The daemon appends to an open "
+                    ".nebo stream, which object storage can't do. Use "
+                    "NEBO_LOGDIR for a bucket workspace."
+                )
             else:
                 state._remote_dir = Path(remote)
     elif remote_ephemeral:
         state.mode = "remote-ephemeral"
 
-    if state._logdir is None and logdir and not no_local:
-        state._logdir = Path(logdir)
+    # The workspace is built in *every* mode — it anchors the cache identity
+    # and meta/. --no-local only turns the watcher off.
+    if state.workspace is None and logdir:
+        poll = os.environ.get("NEBO_POLL_INTERVAL")
+        state.workspace = open_workspace(
+            logdir,
+            token=os.environ.get("HF_TOKEN"),
+            poll_interval=float(poll) if poll else None,
+        )
+    if no_local:
+        state._watch = False
 
     # Backstop for launches that bypass `nebo serve` (uvicorn --factory as in
     # the Dockerfile, embedders, env-only config): a remote writer dir that
@@ -1655,21 +1685,22 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
     # logdir stays fine (the watcher is non-recursive).
     if (
         state._remote_dir is not None
-        and state._logdir is not None
-        and Path(state._remote_dir).resolve() == Path(state._logdir).resolve()
+        and state.workspace is not None
+        and state._watch
+        and normalize_workspace(state._remote_dir) == state.workspace.uri
     ):
         raise RuntimeError(
             "nebo daemon: the remote dir cannot be the watched logdir "
-            f"({Path(state._logdir).resolve()}) — the watcher would re-ingest "
+            f"({state.workspace.uri}) — the watcher would re-ingest "
             "the daemon's own files. Use a subdirectory (the default "
             "<logdir>/remote/) or disable the watcher (NEBO_NO_LOCAL=1)."
         )
 
     # The run tree lives under the workspace root (the logdir) in *every* mode
     # — it anchors meta/, so --no-local and remote daemons still have one.
-    if state.tree is None and logdir:
+    if state.tree is None and state.workspace is not None:
         from nebo.server.tree import TreeStore
-        state.tree = TreeStore(Path(logdir) / "meta")
+        state.tree = TreeStore(state.workspace, "meta")
 
     # SQLite cache: opt-in via NEBO_CACHE_PATH (set by `nebo serve` unless
     # --no-cache). Directly-constructed DaemonStates (tests, embedders)
@@ -1694,7 +1725,9 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
         )
         sweep_cache_dir(Path(cache_path).parent, retention)
         run_cache = RunCache(
-            cache_path, logdir=state._logdir, media_lru_mb=media_mb
+            cache_path,
+            logdir=state.workspace.uri if state.workspace is not None else None,
+            media_lru_mb=media_mb,
         )
         run_cache.start()
         state.cache = run_cache
@@ -1711,8 +1744,8 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
     async def lifespan(app):
         watcher = None
         watcher_task = None
-        if state._logdir is not None:
-            watcher = DirectoryWatcher(state, logdir=state._logdir)
+        if state.workspace is not None and state._watch:
+            watcher = DirectoryWatcher(state, logdir=state.workspace)
             state._watcher = watcher
             watcher_task = asyncio.create_task(watcher.run())
         janitor_task = None
@@ -1775,6 +1808,13 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
                 watcher.stop()
             if watcher_task is not None:
                 await watcher_task
+            if state.tree is not None:
+                # A bucket-backed tree coalesces writes behind a timer; drain
+                # it before the process goes away.
+                try:
+                    await asyncio.to_thread(state.tree.flush)
+                except Exception:
+                    logger.warning("nebo: failed to flush the run tree", exc_info=True)
             if state.cache is not None:
                 state.cache.close()
 

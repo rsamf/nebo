@@ -23,6 +23,12 @@ import sys
 import time
 from pathlib import Path
 
+from nebo.server.workspace import (
+    WorkspaceError,
+    is_remote_uri,
+    normalize_workspace,
+)
+
 _PID_DIR = Path.home() / ".nebo"
 _PID_FILE = _PID_DIR / "server.pid"
 
@@ -98,7 +104,14 @@ def cmd_serve(args: argparse.Namespace) -> None:
     # --logdir is the workspace root in every mode — it anchors the SQLite
     # cache identity, the meta/ tree, and the default remote dir. --no-local
     # only turns off the directory watcher; it no longer nulls the logdir.
-    logdir_abs = Path(args.logdir).resolve()
+    # It may be a local directory or an hf:// bucket URI; normalize_workspace
+    # canonicalizes both without ever Path.resolve()-ing a URI.
+    try:
+        logdir_key = normalize_workspace(args.logdir)
+    except WorkspaceError as e:
+        print(f"nebo serve: {e}", file=sys.stderr)
+        sys.exit(2)
+    logdir_remote = is_remote_uri(logdir_key)
 
     remote = getattr(args, "remote", None)
     ephemeral = getattr(args, "remote_ephemeral", False)
@@ -114,17 +127,37 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
     remote_abs = None
     if remote is not None:
-        remote_abs = (
-            logdir_abs / "remote" if remote is _REMOTE_DEFAULT
-            else Path(remote).resolve()
-        )
+        # The remote writer appends to an open .nebo stream, which object
+        # storage cannot do cheaply — it stays a local directory.
+        if is_remote_uri(remote):
+            print(
+                "nebo serve: --remote must be a local directory, not a bucket "
+                f"URI (got {remote}).\n"
+                "  The daemon appends to an open .nebo stream, which object "
+                "storage can't do.\n"
+                "  Use --logdir for a bucket workspace.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        if remote is _REMOTE_DEFAULT:
+            if logdir_remote:
+                print(
+                    "nebo serve: --remote needs an explicit directory when "
+                    f"--logdir is a bucket ({logdir_key}).\n"
+                    "  There is no <logdir>/remote/ to default to.",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            remote_abs = Path(logdir_key) / "remote"
+        else:
+            remote_abs = Path(remote).resolve()
         # Watcher input and the remote writer can't share a directory or they
         # feed back into each other. Nesting under the logdir is fine — the
         # watcher is non-recursive.
-        if not args.no_local and remote_abs == logdir_abs:
+        if not args.no_local and str(remote_abs) == logdir_key:
             print(
                 "nebo serve: --remote dir cannot be the watched --logdir.\n"
-                f"  --logdir: {logdir_abs}\n"
+                f"  --logdir: {logdir_key}\n"
                 f"  --remote: {remote_abs}\n"
                 "  Use a subdirectory (the default <logdir>/remote/) or a "
                 "separate path.",
@@ -132,7 +165,11 @@ def cmd_serve(args: argparse.Namespace) -> None:
             )
             sys.exit(2)
 
-    os.environ["NEBO_LOGDIR"] = str(logdir_abs)
+    os.environ["NEBO_LOGDIR"] = logdir_key
+    if getattr(args, "hf_token", None):
+        os.environ["HF_TOKEN"] = args.hf_token
+    if getattr(args, "poll_interval", None):
+        os.environ["NEBO_POLL_INTERVAL"] = str(args.poll_interval)
     if args.no_local:
         os.environ["NEBO_NO_LOCAL"] = "1"
     if remote_abs is not None:
@@ -156,7 +193,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
             cache_path = Path(args.cache_path).resolve()
         else:
             from nebo.server.cache import resolve_cache_path
-            cache_path = resolve_cache_path(logdir_abs)
+            cache_path = resolve_cache_path(logdir_key)
         os.environ["NEBO_CACHE_PATH"] = str(cache_path)
         # Friendly pre-check of the cache's single-owner lock so the common
         # mistake (a second daemon on the same logdir) fails here with a
@@ -286,9 +323,10 @@ def cmd_cache(args: argparse.Namespace) -> None:
             targets = dbs
         elif getattr(args, "logdir", None):
             from nebo.server.cache import resolve_cache_path
+            from nebo.server.workspace import normalize_workspace
 
             name = resolve_cache_path(args.logdir).name
-            resolved = str(Path(args.logdir).resolve())
+            resolved = normalize_workspace(args.logdir)
             targets = [
                 p for p in dbs
                 if p.name == name or _cache_db_info(p)["logdir"] == resolved
@@ -1210,7 +1248,21 @@ def main() -> None:
     p_serve.add_argument(
         "--logdir",
         default=".nebo",
-        help="Directory the daemon watches for .nebo files written by SDK file mode (default: ./.nebo).",
+        help="Workspace the daemon watches for .nebo files (default: ./.nebo). "
+             "Either a local directory or a Hugging Face repo, e.g. "
+             "hf://datasets/acme/runs — a bucket workspace keeps runs durable "
+             "independently of the machine serving them.",
+    )
+    p_serve.add_argument(
+        "--hf-token",
+        help="Hugging Face token for an hf:// --logdir (defaults to HF_TOKEN "
+             "env / cached login). Read access is enough to serve runs; write "
+             "access is only needed to persist the run tree.",
+    )
+    p_serve.add_argument(
+        "--poll-interval", type=float,
+        help="Seconds between workspace scans (default: 0.5 local, 30 for a "
+             "bucket, where each scan is an HTTP request).",
     )
     p_serve.add_argument(
         "--no-local",
@@ -1226,7 +1278,8 @@ def main() -> None:
         default=None,
         metavar="DIR",
         help="Accept runs over the network and persist them as .nebo files in "
-             "DIR (default <logdir>/remote/). Without --remote/-ephemeral, "
+             "DIR (default <logdir>/remote/). Always a local directory — the "
+             "daemon appends to an open stream. Without --remote/-ephemeral, "
              "network runs are rejected.",
     )
     _remote_group.add_argument(
@@ -1530,6 +1583,18 @@ def main() -> None:
     p_deploy.add_argument("--hf-token", help="Hugging Face write token (defaults to HF_TOKEN env / cached login)")
     p_deploy.add_argument("--api-token", help="Token clients must send via X-Nebo-Token. Random if omitted.")
     p_deploy.add_argument("--private", action="store_true", help="Create the Space as private")
+    p_deploy.add_argument(
+        "--logdir",
+        help="Serve runs from a Hugging Face repo, e.g. "
+             "hf://datasets/acme/runs, instead of the Space's ephemeral /data "
+             "volume. Runs then survive rebuilds and scale-to-zero.",
+    )
+    p_deploy.add_argument(
+        "--hf-token-secret",
+        help="Set HF_TOKEN as a Space secret so the daemon can write its run "
+             "tree back to an hf:// --logdir. Omit for read-only access "
+             "(reading a public repo needs no token).",
+    )
     p_deploy.add_argument("--from-source", action="store_true", help="Build a wheel from this checkout and ship it instead of installing from PyPI")
     p_deploy.add_argument("--read", choices=["public", "private"], default="public", help="Read access mode (default: public — anyone can view).")
     p_deploy.add_argument("--write", choices=["public", "private"], default="private", help="Write access mode (default: private — token required to push events / control runs).")

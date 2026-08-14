@@ -77,13 +77,75 @@ WebSocket.
 
     Run in the background. The PID is written to ``~/.nebo/server.pid``.
 
-.. option:: --logdir <dir>
+.. option:: --logdir <dir-or-uri>
 
     The daemon's **workspace root** (default: ``./.nebo``) in every mode:
     it anchors the SQLite cache, the run-tree ``meta/`` directory, and the
-    default ``--remote`` directory. It is also the directory the watcher
+    default ``--remote`` directory. It is also the location the watcher
     tails for ``.nebo`` files written by SDK file-mode runs (ingested as
     they grow, resuming across restarts).
+
+    Either a local directory or a Hugging Face repo — see
+    :ref:`bucket-workspaces` below.
+
+.. _bucket-workspaces:
+
+Bucket workspaces
+~~~~~~~~~~~~~~~~~
+
+``--logdir`` also accepts a Hugging Face repo::
+
+    nebo serve --logdir hf://datasets/acme/runs
+    nebo serve --logdir hf://datasets/acme/runs/experiments   # a subdirectory
+    nebo serve --logdir hf://datasets/acme/runs@main          # a pinned revision
+
+The daemon then reads ``.nebo`` files straight out of the repo, which
+decouples the runs from the machine serving them: the daemon can run on
+your laptop, a server, or a Hugging Face Space, and any of those can be
+destroyed and recreated without losing a run. This is what makes a Space
+that scales to zero viable as a dashboard — on every cold start the daemon
+rebuilds its run list from the file headers alone (a few hundred bytes per
+run) and reads a run's body only when someone opens it.
+
+Publish runs to the bucket with ``huggingface_hub`` — the SDK writes
+``.nebo`` files locally, and you upload them::
+
+    from huggingface_hub import HfApi
+
+    HfApi().upload_folder(
+        folder_path=".nebo",
+        repo_id="acme/runs",
+        repo_type="dataset",
+        allow_patterns=["*.nebo"],
+        delete_patterns=["*.nebo"],   # replace, rather than accumulate
+    )
+
+Notes:
+
+* **Credentials** resolve ``--hf-token`` → ``HF_TOKEN`` → a cached
+  ``huggingface-cli login``. Read access is all that is needed to serve
+  runs; a public repo needs no token at all.
+* **Write access is only for the run tree.** Group edits and group docs are
+  stored under ``meta/`` in the repo. Without a write token the tree still
+  works, but edits live in memory for that process only — run placements
+  re-seed from ``.nebo`` headers on the next start.
+* **Polling is slower.** Each scan is an HTTP request, so the default
+  interval is 30 s rather than 0.5 s (gated behind a cheap commit check, so
+  an idle repo costs almost nothing). Override with ``--poll-interval``.
+* **``--remote`` stays local.** The daemon appends to an open ``.nebo``
+  stream, which object storage cannot do; combine a bucket ``--logdir``
+  with a local ``--remote DIR`` if you also want network intake.
+* Requires ``huggingface_hub`` — ``pip install 'nebo[deploy]'``.
+
+.. option:: --hf-token <token>
+
+    Hugging Face token for an ``hf://`` ``--logdir``. Defaults to
+    ``HF_TOKEN`` / a cached login.
+
+.. option:: --poll-interval <seconds>
+
+    How often to scan the workspace. Defaults to 0.5 s locally, 30 s for a
+    bucket.
 
 **Daemon modes.** By default (plain ``nebo serve``) the daemon is
 **local**: it only ingests ``.nebo`` files from ``--logdir`` and *rejects*
@@ -111,7 +173,8 @@ accept network runs, pick one:
     Accept runs over the network and persist them as ``.nebo`` files in
     ``<dir>`` (default ``<logdir>/remote/``). Mutually exclusive with
     ``--remote-ephemeral``; the directory may not equal ``--logdir`` but
-    may nest under it.
+    may nest under it. Always a local directory — with a bucket
+    ``--logdir`` there is no default to derive, so pass one explicitly.
 
 .. option:: --remote-ephemeral
 
@@ -314,6 +377,29 @@ to a URL and watch them from anywhere (the UI is mobile-friendly).
 .. option:: --private
 
     Create the Space as private.
+
+.. option:: --logdir <hf-uri>
+
+    Serve runs from a Hugging Face repo (see :ref:`bucket-workspaces`)
+    instead of the Space's ``/data`` volume::
+
+        nebo deploy --space-id me/dash --logdir hf://datasets/me/runs
+
+    This matters because a Space's ``/data`` only survives a restart if
+    the Space has paid persistent storage attached — otherwise a Space
+    that scales to zero loses every run it was holding. Reading from a
+    repo makes the Space stateless: rebuild it, pause it, or let it sleep,
+    and the same runs come back. With ``--logdir`` the Space stops
+    accepting network runs; publish ``.nebo`` files to the repo instead.
+
+.. option:: --hf-token-secret <token>
+
+    Set ``HF_TOKEN`` as a Space secret so the daemon can write its run
+    tree back to an ``hf://`` ``--logdir``. Opt-in, and deliberately never
+    inherited from the token used to deploy — that one is usually
+    full-scope, and a Space secret is a much wider blast radius. Without
+    it the Space reads the repo anonymously (fine for a public one) and
+    run-tree edits stay in memory.
 
 .. option:: --from-source
 

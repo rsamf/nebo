@@ -49,6 +49,17 @@ jobs:
           rm -rf nebo/server/static/*
           cp -r ui/dist/* nebo/server/static/
 
+      # Publish BEFORE redeploying. The dataset is the durable source of
+      # truth, so the Space's fresh container should come up with the new
+      # runs already in place — and the redeploy doubles as a cache reset,
+      # which is what keeps a rebuilt run from stacking onto the previous
+      # version of itself (the daemon has no run deletion).
+      - name: Build and publish demo runs to the dataset
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          NEBO_DEMOS_DATASET: rsamf/nebo-demo-runs
+        run: uv run python docs/scripts/build_docs_demos.py
+
       - name: Redeploy demos Space (factory reset)
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -57,11 +68,6 @@ jobs:
           uv run nebo deploy \
             --space-id rsamf/nebo-demos \
             --api-token "$NEBO_DEMOS_TOKEN" \
+            --logdir hf://datasets/rsamf/nebo-demo-runs \
             --read public --write private \
             --from-source
-
-      - name: Build and upload demo runs
-        env:
-          NEBO_DEMOS_URL: https://rsamf-nebo-demos.hf.space
-          NEBO_DEMOS_TOKEN: ${{ secrets.NEBO_DEMOS_TOKEN }}
-        run: uv run python docs/scripts/build_docs_demos.py
