@@ -17,7 +17,7 @@ import pytest
 from nebo.core.fileformat import NeboFileWriter
 from nebo.server.cache import RunCache, resolve_cache_path
 from nebo.server.daemon import DaemonState
-from nebo.server.tree import TreeStore
+from nebo.server.tree import TreeStore, TreeWriteError
 from nebo.server.watcher import DirectoryWatcher
 from nebo.server.workspace import (
     FileStat,
@@ -62,6 +62,7 @@ class FakeWorkspace:
         self.files: dict[str, bytes] = dict(files or {})
         self.revision = 0
         self.commits: list[list[str]] = []
+        self.deletes: list[str] = []
         self.io_calls = 0
         self.list_calls = 0
         self.read_only = False
@@ -133,6 +134,7 @@ class FakeWorkspace:
         if self.read_only:
             raise PermissionError("403 Forbidden")
         self.commits.append([r for r, _ in adds])
+        self.deletes.extend(deletes)
         for rel in deletes:
             rel = rel.strip("/")
             for n in [k for k in self.files if k == rel or k.startswith(rel + "/")]:
@@ -209,6 +211,23 @@ async def test_watcher_serves_runs_out_of_a_bucket():
     await w._tick()
     assert ws.list_calls == 1
 
+    # A listing that fails must not advance the change marker, or every file
+    # in that commit stays invisible until some later commit bumps the sha.
+    ws.put("b.nebo", build_nebo("bucketaaaaa9", [TEXT]))
+    real_list, boom = ws.list_nebo, [True]
+
+    def flaky():
+        if boom[0]:
+            boom[0] = False
+            raise RuntimeError("502 from the Hub")
+        return real_list()
+
+    ws.list_nebo = flaky
+    await w._tick()                                  # fails
+    await w._tick()                                  # retries, must re-list
+    ws.list_nebo = real_list
+    assert "bucketaaaaa9" in state.runs
+
     uri = ws._uri("a.nebo")
     header_end = w._tracked[uri].offset
 
@@ -219,7 +238,8 @@ async def test_watcher_serves_runs_out_of_a_bucket():
 
     # Media is stored as a (uri, offset, length) reference, and the uri must
     # be self-describing: the cache resolves it with no workspace in hand.
-    batch, _, _ = w._read_chunk(uri, header_end)
+    with ws.reader(uri, header_end) as f:
+        batch, _, _ = w._read_chunk(f, uri)
     src = next((e["_media_src"] for e in batch if "_media_src" in e), None)
     assert src is not None and src[0] == "hf://datasets/acme/runs/a.nebo"
 
@@ -260,7 +280,15 @@ async def test_republished_objects_do_not_resume_mid_file(tmp_path):
         await w.ensure_deep("bucketaaaaa3")
         assert len(state.runs["bucketaaaaa3"].texts) == 2   # ingested once
 
+        # An unreadable root is not an empty one: a listing that raises must
+        # leave every offset alone, or a transiently missing directory reaps
+        # the lot and re-ingests it on the way back.
+        ws.list_nebo = lambda: (_ for _ in ()).throw(OSError("root gone"))
+        await w._tick()
+        assert len(w._tracked) == 1
+
         # Gone from the bucket -> forget the offset, in RAM and in the cache.
+        del ws.list_nebo
         ws.remove("a.nebo")
         await w._tick()
         cache.flush()
@@ -308,7 +336,26 @@ def test_bucket_run_tree_coalesces_writes_and_survives_a_read_only_repo(caplog):
         time.sleep(0.01)
     assert len(ws.commits) == 3
 
-    # A public repo with no write token: degrade to RAM, warn once.
+    # Deletes are only emitted for docs folders that exist: the Hub rejects a
+    # commit deleting a missing path, which would take the bundled tree.json
+    # write down with it.
+    docless = FakeWorkspace()
+    d = TreeStore(docless, "meta", debounce=30.0)
+    d.create_group("exp/a")
+    d.flush()
+    d.move_group("exp/a", "exp/b")
+    d.create_group("exp/c")
+    d.flush()
+    d.delete_group("exp/c", set())
+    assert docless.deletes == [], "no docs -> nothing to delete"
+    d.set_doc("exp/b", "README.md", "hi")
+    d.move_group("exp/b", "exp/d")
+    assert docless.deletes == ["meta/docs/exp/b/"]
+    assert d.get_doc("exp/d", "README.md") == "hi"
+
+    # A public repo with no write token: degrade to RAM, warn once — but a
+    # doc write has no RAM fallback, so it must report failure rather than
+    # advertise a doc that reads back 404.
     ws.read_only = True
     ro = TreeStore(ws, "meta", debounce=30.0)
     with caplog.at_level("WARNING", logger="nebo.server.tree"):
@@ -316,4 +363,18 @@ def test_bucket_run_tree_coalesces_writes_and_survives_a_read_only_repo(caplog):
             ro.create_group(f"ro/{i}")
             ro.flush()
     assert ro.to_payload(set())["groups"].keys() >= {"ro/0", "ro/4"}
+    assert sum("cannot write the run tree" in r.message for r in caplog.records) == 1
+    with pytest.raises(TreeWriteError):
+        ro.set_doc("ro/0", "README.md", "nope")
+    assert ro.to_payload(set())["groups"]["ro/0"]["docs"] == []
+
+    # The warning latch clears on success, so a later outage is not silent.
+    ws.read_only = False
+    ro.create_group("ro/back")
+    ro.flush()
+    ws.read_only = True
+    with caplog.at_level("WARNING", logger="nebo.server.tree"):
+        caplog.clear()
+        ro.create_group("ro/again")
+        ro.flush()
     assert sum("cannot write the run tree" in r.message for r in caplog.records) == 1

@@ -57,7 +57,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from nebo.core.fileformat import NeboFileReader
 from nebo.server.workspace import FileStat, Workspace, open_workspace
@@ -93,9 +93,11 @@ class DirectoryWatcher:
         self._tracked: dict[str, _Tracked] = {}
         self._stopping = asyncio.Event()
         self._cache = getattr(state, "cache", None)
-        # Last workspace change marker; while it is unchanged there is nothing
-        # to list. Always None for local backends (scandir is cheap).
+        # Last *successfully listed* workspace change marker; while it is
+        # unchanged there is nothing to list. Always None for local backends
+        # (scandir is cheap).
         self._change_token: Optional[str] = None
+        self._list_failed = False   # warn once per outage, not once per tick
         # Per-run locks so a read-triggered ensure_deep and the tick loop
         # never deep-ingest the same file concurrently.
         self._deepen_locks: dict[str, asyncio.Lock] = {}
@@ -108,10 +110,6 @@ class DirectoryWatcher:
                     size=info.get("size") or 0,
                     token=info.get("token"),
                 )
-
-    @property
-    def workspace(self) -> Workspace:
-        return self._ws
 
     def stop(self) -> None:
         self._stopping.set()
@@ -132,13 +130,28 @@ class DirectoryWatcher:
     async def _tick(self) -> None:
         # Cheap change probe first: on a remote workspace this is one small
         # request, versus a full tree listing.
+        token = None
         if self._ws.is_remote:
             token = await self._ws.run_io(self._ws.change_token)
             if token is not None and token == self._change_token and self._tracked:
                 return
-            self._change_token = token
 
-        stats = await self._ws.run_io(self._ws.list_nebo)
+        try:
+            stats = await self._ws.run_io(self._ws.list_nebo)
+        except Exception as e:
+            # Leave tracked state alone. An empty listing means "every file
+            # was deleted" and would reap every offset we hold, so a
+            # transiently unreadable root must not look like one — and the
+            # change token must not advance past a commit we never read.
+            if not self._list_failed:
+                self._list_failed = True
+                logger.warning("watcher: cannot list %s (%s)", self._ws.uri, e)
+            return
+        if self._list_failed:
+            self._list_failed = False
+            logger.info("watcher: listing %s recovered", self._ws.uri)
+        self._change_token = token
+
         for stat in stats:
             await self._sync_file(stat)
         self._reap({s.uri for s in stats})
@@ -311,66 +324,64 @@ class DirectoryWatcher:
 
         Parsing runs off the event loop for remote workspaces; each chunk is
         handed back here so ingest still interleaves with other requests.
+        The reader stays **open** across chunks — reopening per chunk would
+        re-fetch the whole remaining tail each time, making a large remote
+        file quadratic in chunk count.
         """
-        state = _ReadCursor(start_offset)
-        while True:
-            batch, state.offset, done = await self._ws.run_io(
-                self._read_chunk, uri, state.offset,
-            )
-            if batch:
-                await self._state.ingest_events(
-                    batch, run_id=run_id, source="watcher", broadcast=broadcast,
+        # `reader()` is a context manager in every backend; enter and exit it
+        # by hand so the handle can outlive a single run_io hop.
+        cm = self._ws.reader(uri, start_offset)
+        f = await self._ws.run_io(cm.__enter__)
+        try:
+            offset = start_offset
+            while True:
+                batch, offset, done = await self._ws.run_io(
+                    self._read_chunk, f, uri,
                 )
-            if done:
-                return state.offset
-
-    def _read_chunk(
-        self, uri: str, start_offset: int,
-    ) -> tuple[list[dict], int, bool]:
-        """Read up to ``_INGEST_CHUNK`` entries starting at ``start_offset``."""
-        with self._ws.reader(uri, start_offset) as f:
-            # We seek past the header, so reader._version stays None
-            # (passthrough) — safe because only current-format files grow.
-            reader = NeboFileReader(f)
-            batch: list[dict] = []
-            for entry, entry_start, entry_end in reader.read_entries_incremental():
-                # The payload's own "type" key (spread second) deliberately
-                # wins over the byte-derived one: alert frames are written as
-                # unregistered byte 255 ("unknown_255") with the full event
-                # dict as payload, and this recovery is what ingests them.
-                event = {"type": entry["type"], **entry["payload"]}
-                if event.get("type") in ("image", "audio") and "data" in event:
-                    event["_media_src"] = (
-                        uri, entry_start, entry_end - entry_start,
+                if batch:
+                    await self._state.ingest_events(
+                        batch, run_id=run_id, source="watcher",
+                        broadcast=broadcast,
                     )
-                batch.append(event)
-                if len(batch) >= _INGEST_CHUNK:
-                    return batch, f.tell(), False
-            return batch, f.tell(), True
+                if done:
+                    return offset
+        finally:
+            await self._ws.run_io(cm.__exit__, None, None, None)
+
+    def _read_chunk(self, f: Any, uri: str) -> tuple[list[dict], int, bool]:
+        """Read up to ``_INGEST_CHUNK`` entries from an open reader."""
+        # We seek past the header, so reader._version stays None
+        # (passthrough) — safe because only current-format files grow.
+        reader = NeboFileReader(f)
+        batch: list[dict] = []
+        for entry, entry_start, entry_end in reader.read_entries_incremental():
+            # The payload's own "type" key (spread second) deliberately
+            # wins over the byte-derived one: alert frames are written as
+            # unregistered byte 255 ("unknown_255") with the full event
+            # dict as payload, and this recovery is what ingests them.
+            event = {"type": entry["type"], **entry["payload"]}
+            if event.get("type") in ("image", "audio") and "data" in event:
+                event["_media_src"] = (
+                    uri, entry_start, entry_end - entry_start,
+                )
+            batch.append(event)
+            if len(batch) >= _INGEST_CHUNK:
+                return batch, f.tell(), False
+        return batch, f.tell(), True
 
     def _persist_offset(
         self, uri: str, run_id: str | None, offset: int, *, shallow: bool,
         stat: Optional[FileStat] = None,
     ) -> None:
-        if self._cache is None:
+        # No re-stat fallback: the only caller that can pass None is _deepen
+        # when the object vanished mid-read, and re-statting from async
+        # context would put a blocking request back on the event loop.
+        if self._cache is None or stat is None:
             return
-        if stat is None:
-            stat = self._ws.stat(uri)
-            if stat is None:
-                return
         self._cache.enqueue(
             ("watch_file", uri, run_id, offset, stat.size, stat.mtime,
              shallow, stat.token)
         )
-
-
-class _ReadCursor:
-    """Mutable offset carried across chunked reads."""
-
-    __slots__ = ("offset",)
-
-    def __init__(self, offset: int) -> None:
-        self.offset = offset
 
 
 class _Tracked:

@@ -355,6 +355,10 @@ def cmd_deploy(args: argparse.Namespace) -> None:
     # from PyPI; with --from-source we build a wheel locally and ship
     # it alongside the Dockerfile so the Space runs the current
     # checkout instead of the last published release.
+    # A bucket logdir needs huggingface_hub inside the Space, which only the
+    # `deploy` extra provides. Without it the daemon raises WorkspaceError
+    # while building its run tree and the Space never serves a single request.
+    extra = "[deploy]" if logdir else ""
     wheel_path: Optional[Path] = None
     if getattr(args, "from_source", False):
         tmp = Path(tempfile.mkdtemp(prefix="nebo-deploy-"))
@@ -363,10 +367,10 @@ def cmd_deploy(args: argparse.Namespace) -> None:
         # wheels because it parses version/abi/platform from the name.
         install_block = (
             f"COPY {wheel_path.name} /tmp/\n"
-            f"RUN pip install --no-cache-dir /tmp/{wheel_path.name}"
+            f"RUN pip install --no-cache-dir '/tmp/{wheel_path.name}{extra}'"
         )
     else:
-        install_block = "RUN pip install --no-cache-dir 'nebo'"
+        install_block = f"RUN pip install --no-cache-dir 'nebo{extra}'"
 
     # An HF token on the Space is only needed to *write* the run tree back to
     # the bucket. It is never derived from the ambient deploy credential:

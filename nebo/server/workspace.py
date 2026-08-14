@@ -323,13 +323,15 @@ class LocalWorkspace:
     def list_nebo(self) -> list[FileStat]:
         # Non-recursive on purpose: the --remote writer dir and meta/ can sit
         # inside the logdir without feeding back into the watcher.
-        try:
-            entries = [
-                e for e in os.scandir(self._root)
-                if e.is_file() and e.name.endswith(".nebo")
-            ]
-        except FileNotFoundError:
-            return []
+        #
+        # An unreadable root raises rather than reporting an empty workspace:
+        # the watcher treats "no files" as "every tracked file was deleted",
+        # so a transiently missing directory would otherwise reap every
+        # offset it holds.
+        entries = [
+            e for e in os.scandir(self._root)
+            if e.is_file() and e.name.endswith(".nebo")
+        ]
         out: list[FileStat] = []
         for e in entries:
             try:
@@ -588,12 +590,13 @@ class HFWorkspace:
     # -- meta/ -------------------------------------------------------------
 
     def read_bytes(self, rel: str) -> Optional[bytes]:
+        # `None` means "not there", and nothing else. A transport failure
+        # must propagate: callers treat None as absence, and TreeStore in
+        # particular would read a failed tree.json fetch as an empty tree and
+        # commit that over real curation on the next mutation.
         try:
             return self.fs.cat_file(self._fs_path(rel))
         except FileNotFoundError:
-            return None
-        except Exception:
-            logger.warning("workspace: failed to read %s/%s", self.uri, rel)
             return None
 
     def list_dir(self, rel: str) -> list[str]:
@@ -736,11 +739,6 @@ def _remote_for(uri: str) -> HFWorkspace:
     return ws
 
 
-def reset_remote_cache() -> None:
-    """Drop memoized remote backends (tests, credential changes)."""
-    _REMOTE_CACHE.clear()
-
-
 def read_frame_bytes(uri: str, offset: int, length: int) -> Optional[bytes]:
     """Read ``length`` bytes at ``offset`` from a file URI, any backend.
 
@@ -754,9 +752,8 @@ def read_frame_bytes(uri: str, offset: int, length: int) -> Optional[bytes]:
         except WorkspaceError:
             logger.warning("workspace: cannot resolve %s (huggingface_hub missing)", uri)
             return None
-    try:
-        with open(uri, "rb") as f:
-            f.seek(offset)
-            return f.read(length)
-    except OSError:
-        return None
+    return _LOCAL_READER.read_range(uri, offset, length)
+
+
+# Path-agnostic: `read_range` takes absolute URIs, so the root is irrelevant.
+_LOCAL_READER = LocalWorkspace(".")

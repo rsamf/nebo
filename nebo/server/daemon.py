@@ -1648,11 +1648,17 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
             if remote.strip().lower() in ("1", "true", "yes"):
                 # The writer appends to an open stream, so it is always a
                 # local directory — a bucket logdir has no <logdir>/remote/.
-                base = (
-                    Path(logdir) if logdir and not is_remote_uri(logdir)
-                    else Path(".nebo")
-                )
-                state._remote_dir = base / "remote"
+                # Erroring here matches `nebo serve --remote`; silently
+                # defaulting to a relative ./.nebo/remote would put network
+                # runs on an ephemeral container disk, which is the exact
+                # data loss a bucket logdir exists to avoid.
+                if logdir and is_remote_uri(logdir):
+                    raise RuntimeError(
+                        "nebo daemon: NEBO_REMOTE=1 needs an explicit directory "
+                        f"when NEBO_LOGDIR is a bucket ({logdir}). There is no "
+                        "<logdir>/remote/ to default to."
+                    )
+                state._remote_dir = (Path(logdir) if logdir else Path(".nebo")) / "remote"
             elif is_remote_uri(remote):
                 raise RuntimeError(
                     "nebo daemon: NEBO_REMOTE must be a local directory, not a "
@@ -2279,12 +2285,25 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
     # NOTE on route order: the doc routes (`/groups/{path:path}/docs/{name}`)
     # MUST be declared before the group catch-alls (`/groups/{path:path}`),
     # because `{path:path}` is greedy and would otherwise swallow a doc path.
-    from nebo.server.tree import TreeConflict
+    from nebo.server.tree import TreeConflict, TreeWriteError
 
     _NO_TREE = JSONResponse(
         status_code=503,
         content={"error": "the run tree needs a workspace (a --logdir)"},
     )
+
+    async def _tree_io(fn, *args):
+        """Run a TreeStore call without blocking the event loop.
+
+        On a bucket workspace these are HTTP round trips (a doc read, a
+        commit, and for a group move one listing plus a read per doc). Inline
+        they would freeze WS broadcast and ingest for the duration, the same
+        reason every watcher call goes through `Workspace.run_io`.
+        """
+        ws = state.workspace
+        if ws is not None and getattr(ws, "is_remote", False):
+            return await asyncio.to_thread(fn, *args)
+        return fn(*args)
 
     @app.get("/tree")
     async def get_tree():
@@ -2361,7 +2380,7 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
         if state.tree is None:
             return _NO_TREE
         try:
-            created = state.tree.create_group(body.get("path", ""))
+            created = await _tree_io(state.tree.create_group, body.get("path", ""))
         except ValueError as e:
             return JSONResponse(status_code=422, content={"error": str(e)})
         state._enqueue_tree_update()
@@ -2374,7 +2393,7 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
         if state.tree is None:
             return _NO_TREE
         try:
-            content = state.tree.get_doc(path, name)
+            content = await _tree_io(state.tree.get_doc, path, name)
         except ValueError as e:
             return JSONResponse(status_code=422, content={"error": str(e)})
         if content is None:
@@ -2393,9 +2412,11 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
                 status_code=413, content={"error": "doc exceeds 1 MB"}
             )
         try:
-            created = state.tree.set_doc(path, name, body.decode("utf-8"))
+            created = await _tree_io(state.tree.set_doc, path, name, body.decode("utf-8"))
         except ValueError as e:
             return JSONResponse(status_code=422, content={"error": str(e)})
+        except TreeWriteError as e:
+            return JSONResponse(status_code=503, content={"error": str(e)})
         state._enqueue_tree_update()
         return JSONResponse(status_code=201 if created else 200, content={"ok": True})
 
@@ -2404,9 +2425,11 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
         if state.tree is None:
             return _NO_TREE
         try:
-            deleted = state.tree.delete_doc(path, name)
+            deleted = await _tree_io(state.tree.delete_doc, path, name)
         except ValueError as e:
             return JSONResponse(status_code=422, content={"error": str(e)})
+        except TreeWriteError as e:
+            return JSONResponse(status_code=503, content={"error": str(e)})
         if not deleted:
             return JSONResponse(
                 status_code=404, content={"error": f"doc '{name}' not found"}
@@ -2419,7 +2442,7 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
         if state.tree is None:
             return _NO_TREE
         try:
-            state.tree.move_group(path, body.get("new_path", ""))
+            await _tree_io(state.tree.move_group, path, body.get("new_path", ""))
         except TreeConflict as e:
             return JSONResponse(status_code=409, content={"error": str(e)})
         except ValueError as e:
@@ -2432,7 +2455,7 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
         if state.tree is None:
             return _NO_TREE
         try:
-            state.tree.delete_group(path, set(state.known_run_ids()))
+            await _tree_io(state.tree.delete_group, path, set(state.known_run_ids()))
         except TreeConflict as e:
             return JSONResponse(status_code=409, content={"error": str(e)})
         except ValueError as e:
@@ -2445,7 +2468,7 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
         if state.tree is None:
             return _NO_TREE
         try:
-            gp = state.tree.set_run_group(run_id, body.get("group", ""))
+            gp = await _tree_io(state.tree.set_run_group, run_id, body.get("group", ""))
         except ValueError as e:
             return JSONResponse(status_code=422, content={"error": str(e)})
         state._enqueue_tree_update()
