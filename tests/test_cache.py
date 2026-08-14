@@ -248,13 +248,14 @@ class TestOpsAndAccessors:
     def test_watch_files_roundtrip(self, tmp_path):
         c = _mk(tmp_path)
         try:
-            c.enqueue(("watch_file", "/tmp/a.nebo", "r1", 100, 120, 5.0, True))
-            c.enqueue(("watch_file", "/tmp/a.nebo", "r1", 200, 220, 6.0, False))
+            c.enqueue(("watch_file", "/tmp/a.nebo", "r1", 100, 120, 5.0, True, None))
+            c.enqueue(("watch_file", "/tmp/a.nebo", "r1", 200, 220, 6.0, False, "blob1"))
             assert c.flush()
             wf = c.get_watch_files()
             assert wf["/tmp/a.nebo"]["offset"] == 200
             assert wf["/tmp/a.nebo"]["run_id"] == "r1"
             assert wf["/tmp/a.nebo"]["shallow"] is False
+            assert wf["/tmp/a.nebo"]["token"] == "blob1"
         finally:
             c.close()
 

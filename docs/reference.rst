@@ -738,13 +738,25 @@ SDK-side (read by ``nb.init()``):
 Daemon-side (read by ``nebo serve``):
 
 ``NEBO_LOGDIR``
-    The daemon's workspace root (watched dir, cache anchor, and ``meta/``
-    home). Set automatically by ``nebo serve --logdir``.
+    The daemon's workspace root (watched location, cache anchor, and
+    ``meta/`` home). A local directory or a Hugging Face repo
+    (``hf://datasets/<owner>/<name>``). Set automatically by
+    ``nebo serve --logdir``.
+
+``HF_TOKEN``
+    Hugging Face credential for an ``hf://`` workspace. Read access is
+    enough to serve runs; write access is only needed to persist the run
+    tree. Set by ``nebo serve --hf-token``, and read directly by
+    ``huggingface_hub`` otherwise.
+
+``NEBO_POLL_INTERVAL``
+    Seconds between workspace scans. Defaults to 0.5 locally and 30 for a
+    bucket. Set by ``nebo serve --poll-interval``.
 
 ``NEBO_REMOTE``
     A path (or ``1`` for the default ``<logdir>/remote/``): the daemon
-    accepts network runs and persists them there. Set by
-    ``nebo serve --remote``.
+    accepts network runs and persists them there. Always a local
+    directory. Set by ``nebo serve --remote``.
 
 ``NEBO_REMOTE_EPHEMERAL``
     When set, the daemon accepts network runs but persists none of them

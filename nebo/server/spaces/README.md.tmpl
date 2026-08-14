@@ -13,26 +13,7 @@ pinned: false
 This Space hosts a [nebo](https://github.com/rsamf/nebo) daemon — a multi-modal
 logging dashboard with a live web UI, MCP server, and HTTP API.
 
-## Connect from Python
-
-```python
-import nebo as nb
-
-nb.init(
-    url="https://${space_url}",
-    api_token="<your NEBO_API_TOKEN>",
-)
-
-@nb.fn()
-def step():
-    nb.log("hello from a remote Space")
-    nb.log_line("loss", 0.42)
-
-step()
-```
-
-The token must match the `NEBO_API_TOKEN` Space secret. To rotate it,
-edit the secret in this Space's Settings panel.
+${intake_block}
 
 ## Embed a slice anywhere
 
@@ -40,7 +21,7 @@ edit the secret in this Space's Settings panel.
 <iframe src="https://${space_url}/?run=<run-id>&token=<token>" width="100%" height="600"></iframe>
 ```
 
-Slice flags: `&dag`, `&logs`, `&metrics`, `&metric=loss`, `&images`,
+Slice flags: `&dag`, `&flat`, `&text`, `&metrics`, `&metric=loss`, `&images`,
 `&image=hero.png`, `&audios`, `&audio=bell.wav`. Combine with `&node=<func>`
 to filter to one node.
 

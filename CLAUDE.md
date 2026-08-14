@@ -63,6 +63,50 @@ files written by SDK file-mode runs and ingests them as they grow
 watcher (the logdir still anchors everything); it errors unless a remote
 flag is also given, since the daemon would then ingest nothing.
 
+### Workspaces (`--logdir` is a URI, not a path)
+
+`nebo/server/workspace.py` is the **only** module that decides what a
+logdir string means. Two backends: `LocalWorkspace` (a directory —
+byte-identical to pre-workspace nebo) and `HFWorkspace`
+(`hf://[datasets|spaces|models/]<owner>/<name>[@rev][/prefix]`, built
+directly on `huggingface_hub` — `HfFileSystem` for ranged reads, `HfApi`
+for commits, lazily imported so a local daemon never touches the optional
+dep). A bucket workspace decouples runs from the machine serving them: an
+ephemeral host (a Space that scales to zero, a container, CI) can be
+destroyed and recreated and still serve the same runs.
+
+Two rules the whole feature rests on:
+
+- **`normalize_workspace()` replaces every `Path(logdir).resolve()`.**
+  `Path("hf://x").resolve()` silently yields `$CWD/hf:/x`, and cache
+  identity is a sha1 of this string (`resolve_cache_path`) that
+  `_meta_matches` uses to drop the entire db on mismatch — so
+  `cli.py`, `cache.py`, and `daemon.py` must all derive it the same way.
+- **Every file a workspace exposes is a self-describing URI** (an absolute
+  path locally, a full `hf://` URI remotely). Those strings are persisted
+  in `watch_files.path` and `media.src_path` and resolved much later by
+  code holding no workspace, so `workspace.read_frame_bytes()` dispatches
+  on the URI alone.
+
+Remote specifics: all watcher I/O goes through `Workspace.run_io` (inline
+locally, `asyncio.to_thread` remotely — blocking HTTP on the event loop
+would stall the daemon); a poll first checks a cheap commit marker
+(`change_token`) and skips listing while unchanged; reads fetch
+`[offset, EOF]` in **one** ranged GET wrapped in `_OffsetStream` (which
+rebases tell/seek to absolute) because `read_entries_incremental` reads
+1+4+N bytes *per entry*; a tail over `REMOTE_INLINE_MAX` streams through
+fsspec's block cache instead. Object storage replaces objects rather than
+appending, so a backend that reports a `FileStat.token` gets replacement
+semantics — a vanished file is reaped, a changed marker re-registers from
+the header. `--remote` stays a **local** directory in every case (the
+writer appends to an open stream); `nb.init(uri="hf://…")` is rejected
+outright rather than creating a directory named `hf:`.
+
+State lives on `DaemonState.workspace` (the old `_logdir` field is gone).
+It is built in *every* mode; `_watch` separately gates the watcher, which
+fixes a latent bug where `--no-local` gave `RunCache` a `None` logdir and
+therefore the empty-string cache identity.
+
 **Daemon persistence modes** (`DaemonState.mode`, reported on `/health`):
 
 - **local** (default, plain `nebo serve`): watcher only. Network run
@@ -82,7 +126,9 @@ flag is also given, since the daemon would then ingest nothing.
 
 `--remote` and `--remote-ephemeral` are mutually exclusive; a remote dir
 may not equal `--logdir` (watcher/writer feedback), though nesting under
-it is fine (the watcher is non-recursive). The equality check is enforced
+it is fine (the watcher is non-recursive). A bucket `--logdir` has no
+`<logdir>/remote/` to default to, so a bare `--remote` errors there and
+an `hf://` value for `--remote` is rejected. The equality check is enforced
 in **both** `cli.py:cmd_serve` (flag form) and `create_daemon_app` (env
 form — covers the Dockerfile's `uvicorn --factory` launch and embedders);
 with the watcher off (`--no-local`) the combination is allowed. Env
@@ -137,6 +183,8 @@ writes stay synchronous; the cache interaction is a `queue.put`.
   either as `(src_path, offset, length)` refs into the `.nebo` file
   (watcher runs, and remote-mode runs that the daemon writes itself) or
   blob rows (`--remote-ephemeral` runs, which have no file to reference).
+  `src_path` is a workspace URI, so `_read_media_ref` resolves it through
+  `workspace.read_frame_bytes` — one ranged GET for a bucket file.
   `GET /runs/{id}/media/{media_id}` returns **raw bytes** with sniffed
   Content-Type, `ETag: media_id`, `Cache-Control: immutable` (304 on
   If-None-Match); the UI points `<img>/<audio>` straight at it.
@@ -152,10 +200,13 @@ writes stay synchronous; the cache interaction is a `queue.put`.
   The `shallow` flag lives in `watch_files`, so restarts keep shallow files
   shallow. This is possible with no file-format change because there is no
   `ended_at` — the header alone fully populates a run-list row.
-- **Watcher offsets persist** in the cache (`watch_files` table): daemon
-  restarts resume tailing instead of replaying. Reads use
-  `NeboFileReader.read_entries_incremental`, which parks at a torn tail
-  frame — offsets only advance past complete entries.
+- **Watcher offsets persist** in the cache (`watch_files` table, keyed by
+  the file's workspace URI): daemon restarts resume tailing instead of
+  replaying. Reads use `NeboFileReader.read_entries_incremental`, which
+  parks at a torn tail frame — offsets only advance past complete entries.
+  `watch_files.token` holds the content marker used for replacement
+  detection, and a `watch_file_drop` op forgets a vanished path so one that
+  reappears is registered from its header rather than resumed mid-file.
 - **Single owner**: `RunCache.start()` takes an exclusive flock on
   `<db>.lock` and raises `CacheLockedError` if another live process holds
   it — two daemons sharing one cache duplicate history rows and clobber
@@ -198,6 +249,8 @@ Env vars: `NEBO_URI` overrides the constructor arg.
 `NEBO_RUN_ID`, `NEBO_FLUSH_INTERVAL`, `NEBO_API_TOKEN` are unchanged.
 `NEBO_QUIET=1` suppresses the startup banner.
 `NEBO_NO_STORE=1` makes file mode a no-op (used by the test suite).
+Daemon side, `HF_TOKEN` authenticates a bucket `--logdir` (`--hf-token`)
+and `NEBO_POLL_INTERVAL` overrides the scan cadence (`--poll-interval`).
 
 Two process-wide escape hatches let headless contexts (CI, embedders,
 tests) suppress side-effects:
@@ -212,9 +265,22 @@ tree over run_ids (`.nebo` files never move; the physical layout stays flat).
 `nebo/server/tree.py:TreeStore` owns it, persisted to `<logdir>/meta/tree.json`
 (the workspace root's `meta/`, **outside** the disposable cache, so it survives
 `nebo cache clear`). The daemon holds it in RAM and rewrites the whole tiny JSON
-atomically (tmp + fsync + `os.replace`) on every mutation, guarded by a
-`threading.Lock` (mutations come from both async endpoints and the sync ingest
-seed). Group docs are real markdown files under `meta/docs/<group-path>/`.
+on every mutation, guarded by a `threading.RLock` (mutations come from both
+async endpoints and the sync ingest seed). Group docs are real markdown files
+under `meta/docs/<group-path>/`.
+
+Storage goes through the `Workspace` seam, so the tree follows the workspace
+root. Locally that is the same atomic tmp + fsync + `os.replace`. On a bucket
+three things differ, all because a write is an HTTP commit rather than a rename:
+tree writes are **debounced** (`REMOTE_SAVE_DEBOUNCE_S`, capped by
+`REMOTE_SAVE_MAX_DELAY_S`) so a cold start seeding one group per run makes one
+commit, with `TreeStore.flush()` draining it from the lifespan teardown; doc
+mutations bypass the timer (a `PUT` must be visible to the next `GET`) and carry
+any pending tree change in the same commit; and doc **names** are indexed in RAM
+because `to_payload()` lists every group's docs on every `GET /tree` and every
+`tree_updated` broadcast (doc contents stay lazy). A bucket the daemon can read
+but not write is supported: the write failure logs once and the tree keeps
+working in memory.
 
 - **Single placement store, seed-once.** `tree.json`'s `runs` map (run_id →
   group) is the *only* placement store — no birth-placement fallback, no
@@ -472,7 +538,7 @@ Smoothed values are rendered, not persisted: raw entries in the store remain unt
 - `nebo/core/` — decorators, DAG builder, session state, `DaemonClient`, config, tracker, `.nebo` file format, `groups.py` (`validate_group_path` — shared SDK/daemon group-path validation), `refs.py` (`parse_ref`/`format_ref` for canonical `nebo://` references; TS twin at `ui/src/lib/refs.ts` — keep in lockstep).
 - `nebo/logging/` — user-facing `log`/`log_line`/`log_bar`/`log_pie`/`log_scatter`/`log_histogram`/`log_image`/`log_audio`/`md`, plus the serializer/queue that batches events to the daemon, and `png.py` (pure-stdlib numpy+zlib PNG encoder — see the Pillow convention below).
 - `nebo/labels.py` — public dataclasses (`Points`, `Boxes`, `Circles`, `Polygons`, `Bitmasks`) for `nb.log_image` overlays. Re-exported as `nb.labels`.
-- `nebo/server/` — `daemon.py` (FastAPI app, created via `create_daemon_app` factory), `cache.py` (`RunCache` write-behind SQLite cache, `MediaLRU`, `media_id_for`, cache-path/sweep helpers), `watcher.py` (directory watcher with persisted offsets + shallow header-only registration), `tree.py` (`TreeStore` — run-tree groups/placements/docs over `meta/tree.json`), `runner.py` (vestigial subprocess manager), `protocol.py` (`MessageType` enum + `decode_batch`).
+- `nebo/server/` — `daemon.py` (FastAPI app, created via `create_daemon_app` factory), `workspace.py` (`--logdir` backends: `LocalWorkspace` / `HFWorkspace`, `normalize_workspace`, `parse_hf_uri`, `read_frame_bytes` — the sole owner of what a logdir string means), `cache.py` (`RunCache` write-behind SQLite cache, `MediaLRU`, `media_id_for`, cache-path/sweep helpers), `watcher.py` (workspace watcher with persisted offsets + shallow header-only registration), `tree.py` (`TreeStore` — run-tree groups/placements/docs over `meta/tree.json`), `runner.py` (vestigial subprocess manager), `protocol.py` (`MessageType` enum + `decode_batch`).
 - `nebo/mcp/` — MCP tools (`tools.py`) and stdio/server entry points. Split into observation (graph, text, metrics, description, run summary/history — `nebo_get_text`; media reads via `nebo_list_images` + `nebo_get_image`, which returns a real MCP image content block that the stdio bridge passes through verbatim — the `_mcp_content` escape hatch in `stdio.py` — so images render inline in MCP clients; audio has no MCP read, only `nebo audio get`), alerts (`wait_for_alert`, `list_alerts`, `set_alert`, `delete_alert`), utility (`load_file`), and write (`log_metric/text/image/audio` — `nebo_log_text` entries are `{run_id?, loggable_id?, name?, message, step?}`). Run lifecycle is NOT exposed — pipelines start/stop via the user's shell.
 - `nebo/client.py` — single HTTP client shared by `nebo/mcp/tools.py` and `nebo/cli.py`. Owns all daemon-bound `urllib` traffic; resolves `--url`/`--port`/`--api-token` from kwargs → `NEBO_CLI_URL`/`NEBO_CLI_PORT`/`NEBO_API_TOKEN` → defaults.
 - `nebo/core/transport.py` — `Transport` Protocol shared by the two SDK transports. `FileTransport` (this module) writes append-only `.nebo` files in file mode; `NetworkTransport` (in `nebo/core/client.py`) POSTs events to a daemon in network mode.

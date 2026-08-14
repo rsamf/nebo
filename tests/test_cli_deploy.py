@@ -118,3 +118,57 @@ def test_happy_path_calls_hf_api() -> None:
     assert fake_api.upload_file.call_count == 2
     paths = {c.kwargs["path_in_repo"] for c in fake_api.upload_file.call_args_list}
     assert paths == {"Dockerfile", "README.md"}
+
+
+def test_logdir_deploy_points_the_space_at_the_bucket() -> None:
+    """The Dockerfile CMD is the whole mechanism: get it wrong and the Space
+    keeps serving its ephemeral /data, which is the bug this feature fixes."""
+    fake_api = MagicMock()
+    fake_module = MagicMock()
+    fake_module.HfApi.return_value = fake_api
+    fake_utils = MagicMock()
+    fake_utils.HfHubHTTPError = type("HfHubHTTPError", (Exception,), {})
+    fake_module.utils = fake_utils
+
+    def run(**over):
+        fake_api.reset_mock()
+        args = argparse.Namespace(**{
+            "space_id": "alice/my-dashboard", "hf_token": "hf_xxx",
+            "api_token": "nb_test_token", "private": False, "from_source": False,
+            "read": "public", "write": "private", "logdir": None,
+            "hf_token_secret": None, "wait": False, **over,
+        })
+        with patch.dict(sys.modules, {
+            "huggingface_hub": fake_module, "huggingface_hub.utils": fake_utils,
+        }):
+            cmd_deploy(args)
+        return {
+            c.kwargs["path_in_repo"]: c.kwargs["path_or_fileobj"].decode("utf-8")
+            for c in fake_api.upload_file.call_args_list
+        }, {c.kwargs["key"] for c in fake_api.add_space_secret.call_args_list}
+
+    def cmd(dockerfile):
+        return next(ln for ln in dockerfile.splitlines() if ln.startswith("CMD ["))
+
+    base = 'CMD ["nebo", "serve", "--host", "0.0.0.0", "--port", "7860"'
+
+    # Deploys that predate bucket logdirs are untouched.
+    files, secrets = run()
+    assert cmd(files["Dockerfile"]) == base + ', "--remote", "/data", "--no-local"]'
+    assert "Connect from Python" in files["README.md"]
+
+    # With a bucket: watcher on, no network intake, and the Space page stops
+    # telling visitors to push runs it would reject.
+    files, secrets = run(logdir="hf://datasets/acme/runs")
+    assert cmd(files["Dockerfile"]) == base + ', "--logdir", "hf://datasets/acme/runs"]'
+    assert "does **not** accept runs pushed over the network" in files["README.md"]
+    assert "acme/runs" in files["README.md"]
+    # The deploy credential is usually full-scope — never leak it implicitly.
+    assert secrets == {"NEBO_API_TOKEN"}
+    _, secrets = run(logdir="hf://datasets/acme/runs", hf_token_secret="hf_write")
+    assert secrets == {"NEBO_API_TOKEN", "HF_TOKEN"}
+
+    # A Space has no durable local disk to point at.
+    for bad in ("/var/lib/nebo", "hf://datasets/acme"):
+        with pytest.raises(SystemExit):
+            run(logdir=bad)

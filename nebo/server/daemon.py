@@ -27,6 +27,11 @@ from nebo.server.cache import (
     media_id_for,
 )
 from nebo.server.protocol import MessageType, decode_batch
+from nebo.server.workspace import (
+    is_remote_uri,
+    normalize_workspace,
+    open_workspace,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -374,7 +379,11 @@ class DaemonState:
         # them to `_remote_dir`; "remote-ephemeral" accepts without persisting.
         self.mode: str = "remote-ephemeral"
         self._remote_dir: Optional[Path] = None
-        self._logdir: Optional[Path] = None
+        # The workspace root (--logdir): a local directory or an hf:// bucket.
+        # Set in every mode — it anchors the cache identity and meta/ — while
+        # `_watch` separately controls whether the watcher tails it.
+        self.workspace: Optional[Any] = None
+        self._watch: bool = True
         # Set by the lifespan when the directory watcher starts. Read-access
         # deep-ingest of shallow (header-only) runs delegates to it.
         self._watcher: Optional[Any] = None
@@ -1637,15 +1646,42 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
         state.mode = "remote"
         if state._remote_dir is None:
             if remote.strip().lower() in ("1", "true", "yes"):
-                base = Path(logdir) if logdir else Path(".nebo")
-                state._remote_dir = base / "remote"
+                # The writer appends to an open stream, so it is always a
+                # local directory — a bucket logdir has no <logdir>/remote/.
+                # Erroring here matches `nebo serve --remote`; silently
+                # defaulting to a relative ./.nebo/remote would put network
+                # runs on an ephemeral container disk, which is the exact
+                # data loss a bucket logdir exists to avoid.
+                if logdir and is_remote_uri(logdir):
+                    raise RuntimeError(
+                        "nebo daemon: NEBO_REMOTE=1 needs an explicit directory "
+                        f"when NEBO_LOGDIR is a bucket ({logdir}). There is no "
+                        "<logdir>/remote/ to default to."
+                    )
+                state._remote_dir = (Path(logdir) if logdir else Path(".nebo")) / "remote"
+            elif is_remote_uri(remote):
+                raise RuntimeError(
+                    "nebo daemon: NEBO_REMOTE must be a local directory, not a "
+                    f"bucket URI (got {remote}). The daemon appends to an open "
+                    ".nebo stream, which object storage can't do. Use "
+                    "NEBO_LOGDIR for a bucket workspace."
+                )
             else:
                 state._remote_dir = Path(remote)
     elif remote_ephemeral:
         state.mode = "remote-ephemeral"
 
-    if state._logdir is None and logdir and not no_local:
-        state._logdir = Path(logdir)
+    # The workspace is built in *every* mode — it anchors the cache identity
+    # and meta/. --no-local only turns the watcher off.
+    if state.workspace is None and logdir:
+        poll = os.environ.get("NEBO_POLL_INTERVAL")
+        state.workspace = open_workspace(
+            logdir,
+            token=os.environ.get("HF_TOKEN"),
+            poll_interval=float(poll) if poll else None,
+        )
+    if no_local:
+        state._watch = False
 
     # Backstop for launches that bypass `nebo serve` (uvicorn --factory as in
     # the Dockerfile, embedders, env-only config): a remote writer dir that
@@ -1655,21 +1691,22 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
     # logdir stays fine (the watcher is non-recursive).
     if (
         state._remote_dir is not None
-        and state._logdir is not None
-        and Path(state._remote_dir).resolve() == Path(state._logdir).resolve()
+        and state.workspace is not None
+        and state._watch
+        and normalize_workspace(state._remote_dir) == state.workspace.uri
     ):
         raise RuntimeError(
             "nebo daemon: the remote dir cannot be the watched logdir "
-            f"({Path(state._logdir).resolve()}) — the watcher would re-ingest "
+            f"({state.workspace.uri}) — the watcher would re-ingest "
             "the daemon's own files. Use a subdirectory (the default "
             "<logdir>/remote/) or disable the watcher (NEBO_NO_LOCAL=1)."
         )
 
     # The run tree lives under the workspace root (the logdir) in *every* mode
     # — it anchors meta/, so --no-local and remote daemons still have one.
-    if state.tree is None and logdir:
+    if state.tree is None and state.workspace is not None:
         from nebo.server.tree import TreeStore
-        state.tree = TreeStore(Path(logdir) / "meta")
+        state.tree = TreeStore(state.workspace, "meta")
 
     # SQLite cache: opt-in via NEBO_CACHE_PATH (set by `nebo serve` unless
     # --no-cache). Directly-constructed DaemonStates (tests, embedders)
@@ -1694,7 +1731,9 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
         )
         sweep_cache_dir(Path(cache_path).parent, retention)
         run_cache = RunCache(
-            cache_path, logdir=state._logdir, media_lru_mb=media_mb
+            cache_path,
+            logdir=state.workspace.uri if state.workspace is not None else None,
+            media_lru_mb=media_mb,
         )
         run_cache.start()
         state.cache = run_cache
@@ -1711,8 +1750,8 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
     async def lifespan(app):
         watcher = None
         watcher_task = None
-        if state._logdir is not None:
-            watcher = DirectoryWatcher(state, logdir=state._logdir)
+        if state.workspace is not None and state._watch:
+            watcher = DirectoryWatcher(state, logdir=state.workspace)
             state._watcher = watcher
             watcher_task = asyncio.create_task(watcher.run())
         janitor_task = None
@@ -1775,6 +1814,13 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
                 watcher.stop()
             if watcher_task is not None:
                 await watcher_task
+            if state.tree is not None:
+                # A bucket-backed tree coalesces writes behind a timer; drain
+                # it before the process goes away.
+                try:
+                    await asyncio.to_thread(state.tree.flush)
+                except Exception:
+                    logger.warning("nebo: failed to flush the run tree", exc_info=True)
             if state.cache is not None:
                 state.cache.close()
 
@@ -2239,12 +2285,25 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
     # NOTE on route order: the doc routes (`/groups/{path:path}/docs/{name}`)
     # MUST be declared before the group catch-alls (`/groups/{path:path}`),
     # because `{path:path}` is greedy and would otherwise swallow a doc path.
-    from nebo.server.tree import TreeConflict
+    from nebo.server.tree import TreeConflict, TreeWriteError
 
     _NO_TREE = JSONResponse(
         status_code=503,
         content={"error": "the run tree needs a workspace (a --logdir)"},
     )
+
+    async def _tree_io(fn, *args):
+        """Run a TreeStore call without blocking the event loop.
+
+        On a bucket workspace these are HTTP round trips (a doc read, a
+        commit, and for a group move one listing plus a read per doc). Inline
+        they would freeze WS broadcast and ingest for the duration, the same
+        reason every watcher call goes through `Workspace.run_io`.
+        """
+        ws = state.workspace
+        if ws is not None and getattr(ws, "is_remote", False):
+            return await asyncio.to_thread(fn, *args)
+        return fn(*args)
 
     @app.get("/tree")
     async def get_tree():
@@ -2321,7 +2380,7 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
         if state.tree is None:
             return _NO_TREE
         try:
-            created = state.tree.create_group(body.get("path", ""))
+            created = await _tree_io(state.tree.create_group, body.get("path", ""))
         except ValueError as e:
             return JSONResponse(status_code=422, content={"error": str(e)})
         state._enqueue_tree_update()
@@ -2334,7 +2393,7 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
         if state.tree is None:
             return _NO_TREE
         try:
-            content = state.tree.get_doc(path, name)
+            content = await _tree_io(state.tree.get_doc, path, name)
         except ValueError as e:
             return JSONResponse(status_code=422, content={"error": str(e)})
         if content is None:
@@ -2353,9 +2412,11 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
                 status_code=413, content={"error": "doc exceeds 1 MB"}
             )
         try:
-            created = state.tree.set_doc(path, name, body.decode("utf-8"))
+            created = await _tree_io(state.tree.set_doc, path, name, body.decode("utf-8"))
         except ValueError as e:
             return JSONResponse(status_code=422, content={"error": str(e)})
+        except TreeWriteError as e:
+            return JSONResponse(status_code=503, content={"error": str(e)})
         state._enqueue_tree_update()
         return JSONResponse(status_code=201 if created else 200, content={"ok": True})
 
@@ -2364,9 +2425,11 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
         if state.tree is None:
             return _NO_TREE
         try:
-            deleted = state.tree.delete_doc(path, name)
+            deleted = await _tree_io(state.tree.delete_doc, path, name)
         except ValueError as e:
             return JSONResponse(status_code=422, content={"error": str(e)})
+        except TreeWriteError as e:
+            return JSONResponse(status_code=503, content={"error": str(e)})
         if not deleted:
             return JSONResponse(
                 status_code=404, content={"error": f"doc '{name}' not found"}
@@ -2379,7 +2442,7 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
         if state.tree is None:
             return _NO_TREE
         try:
-            state.tree.move_group(path, body.get("new_path", ""))
+            await _tree_io(state.tree.move_group, path, body.get("new_path", ""))
         except TreeConflict as e:
             return JSONResponse(status_code=409, content={"error": str(e)})
         except ValueError as e:
@@ -2392,7 +2455,7 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
         if state.tree is None:
             return _NO_TREE
         try:
-            state.tree.delete_group(path, set(state.known_run_ids()))
+            await _tree_io(state.tree.delete_group, path, set(state.known_run_ids()))
         except TreeConflict as e:
             return JSONResponse(status_code=409, content={"error": str(e)})
         except ValueError as e:
@@ -2405,7 +2468,7 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
         if state.tree is None:
             return _NO_TREE
         try:
-            gp = state.tree.set_run_group(run_id, body.get("group", ""))
+            gp = await _tree_io(state.tree.set_run_group, run_id, body.get("group", ""))
         except ValueError as e:
             return JSONResponse(status_code=422, content={"error": str(e)})
         state._enqueue_tree_update()

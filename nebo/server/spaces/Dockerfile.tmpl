@@ -1,11 +1,6 @@
 FROM python:3.12-slim
 
-# Hugging Face Spaces persistent volume mounts at /data. The daemon runs
-# in remote mode (--remote /data) so incoming network runs are persisted
-# there and survive Space restarts. The directory watcher (--logdir) is
-# disabled because the Space's working directory is ephemeral — nothing
-# else would ever write there (--remote satisfies --no-local's intake
-# requirement).
+${serve_comment}
 ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
@@ -15,4 +10,4 @@ ${install_block}
 # default. We bind to 0.0.0.0 so the routed traffic reaches us.
 EXPOSE 7860
 
-CMD ["nebo", "serve", "--host", "0.0.0.0", "--port", "7860", "--remote", "/data", "--no-local"]
+CMD [${serve_args}]

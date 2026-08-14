@@ -1,4 +1,4 @@
-"""Run every docs demo and push the resulting runs to the demos Space.
+"""Run every docs demo and publish the resulting runs to a Hugging Face dataset.
 
 Pipeline:
 
@@ -7,9 +7,20 @@ Pipeline:
      (``docs/demos/<section>/<n>_<name>.py`` -> ``docs-<section>-<name>``).
   3. Execute the script with ``NEBO_URI=<build_dir>`` and
      ``NEBO_RUN_ID=<derived>`` so a ``.nebo`` file lands in the build dir
-     with the pinned ID.
-  4. Call ``nebo load <file> --url $NEBO_DEMOS_URL --api-token $NEBO_DEMOS_TOKEN``
-     for each produced ``.nebo`` file.
+     with the pinned ID, then rename it to ``<run_id>.nebo``.
+  4. Upload the whole build dir to the dataset repo in **one commit** that
+     also deletes every ``*.nebo`` already there, so the bucket ends up
+     holding exactly the runs this build produced.
+
+The demos Space serves those files directly (``nebo serve --logdir
+hf://datasets/<owner>/<name>``), so the runs outlive the Space: it can be
+rebuilt or scaled to zero and still show the same dashboards. That is the
+whole point of publishing to a bucket rather than replaying events into a
+daemon's memory, which is what this script used to do via ``nebo load``.
+
+Filenames are pinned to ``<run_id>.nebo`` — dropping the SDK's timestamp
+prefix — so each rebuild replaces the same paths instead of accumulating one
+per release.
 
 The derived run IDs are referenced verbatim from the ``.rst`` files'
 ``<iframe src=...&run=docs-...&...>``. Renaming or moving a script
@@ -17,15 +28,15 @@ changes its run ID — fix the ``.rst`` to match.
 
 Usage::
 
-    NEBO_DEMOS_URL=https://rsamf-nebo-demos.hf.space \\
-    NEBO_DEMOS_TOKEN=nb_xxx \\
-    uv run python scripts/build_docs_demos.py
+    NEBO_DEMOS_DATASET=rsamf/nebo-demo-runs \\
+    HF_TOKEN=hf_xxx \\
+    uv run python docs/scripts/build_docs_demos.py
 
     # Dry-run (build .nebo files but skip upload):
-    uv run python scripts/build_docs_demos.py --no-upload
+    uv run python docs/scripts/build_docs_demos.py --no-upload
 
     # Only rebuild one section:
-    uv run python scripts/build_docs_demos.py --section index
+    uv run python docs/scripts/build_docs_demos.py --section index
 """
 
 from __future__ import annotations
@@ -88,15 +99,54 @@ def run_demo(script: Path, build_dir: Path) -> Path:
         )
     if len(matches) > 1:
         print(f"     note: multiple files for {run_id}, picking newest: {matches[-1].name}")
-    return matches[-1]
+    # Drop the SDK's timestamp prefix so rebuilds overwrite the same object
+    # instead of piling up a new path per release.
+    final = build_dir / f"{run_id}.nebo"
+    for stale in matches[:-1]:
+        stale.unlink()
+    matches[-1].rename(final)
+    return final
 
 
-def upload(nebo_file: Path, url: str, token: str) -> None:
-    print(f"  -> uploading {nebo_file.name} to {url}")
-    subprocess.run(
-        ["nebo", "load", str(nebo_file), "--url", url, "--api-token", token],
-        cwd=REPO_ROOT,
-        check=True,
+def upload(build_dir: Path, dataset: str, token: str | None) -> None:
+    """Publish the build dir to the dataset, replacing what was there.
+
+    One commit: `delete_patterns` removes every stale `*.nebo` in the same
+    revision that adds the new ones, so the bucket is never half-updated and
+    a run whose demo script was deleted does not linger.
+    """
+    try:
+        from huggingface_hub import HfApi
+    except ImportError:
+        print(
+            "huggingface_hub is required to publish demo runs. Install with:\n"
+            "  uv sync --all-groups\n"
+            "or:\n"
+            "  pip install huggingface_hub",
+            file=sys.stderr,
+        )
+        raise
+
+    api = HfApi(token=token)
+    print(f"Ensuring dataset {dataset} exists...")
+    # Created on first run, so there is nothing to set up by hand. Public on
+    # purpose: the demos Space reads this repo anonymously (no HF_TOKEN secret
+    # is set on it), so a private dataset would serve zero runs.
+    api.create_repo(
+        repo_id=dataset, repo_type="dataset", private=False, exist_ok=True,
+    )
+
+    files = sorted(p.name for p in build_dir.glob("*.nebo"))
+    print(f"Uploading {len(files)} run(s) to hf://datasets/{dataset}:")
+    for name in files:
+        print(f"  -> {name}")
+    api.upload_folder(
+        folder_path=str(build_dir),
+        repo_id=dataset,
+        repo_type="dataset",
+        allow_patterns=["*.nebo"],
+        delete_patterns=["*.nebo"],
+        commit_message=f"docs demos: publish {len(files)} run(s)",
     )
 
 
@@ -114,19 +164,41 @@ def main() -> int:
     parser.add_argument(
         "--no-upload",
         action="store_true",
-        help="Skip the nebo-load step; just produce .nebo files locally.",
+        help="Skip publishing; just produce .nebo files locally.",
     )
     parser.add_argument(
-        "--url",
-        default=os.environ.get("NEBO_DEMOS_URL"),
-        help="Daemon URL. Default: $NEBO_DEMOS_URL.",
+        "--dataset",
+        default=os.environ.get("NEBO_DEMOS_DATASET"),
+        help="Hugging Face dataset repo to publish into, as <owner>/<name>. "
+             "Default: $NEBO_DEMOS_DATASET.",
     )
     parser.add_argument(
-        "--api-token",
-        default=os.environ.get("NEBO_DEMOS_TOKEN"),
-        help="Daemon API token. Default: $NEBO_DEMOS_TOKEN.",
+        "--hf-token",
+        default=os.environ.get("HF_TOKEN"),
+        help="Hugging Face write token. Default: $HF_TOKEN (or a cached login).",
     )
     args = parser.parse_args()
+
+    # Validate the publish arguments before spending a couple of minutes
+    # running 18 demo scripts.
+    if not args.no_upload:
+        if not args.dataset:
+            print(
+                "ERROR: --dataset is required for upload. "
+                "Set NEBO_DEMOS_DATASET, or pass --no-upload.",
+                file=sys.stderr,
+            )
+            return 2
+        # Publishing replaces every *.nebo in the dataset, so a partial build
+        # would delete the sections it did not produce.
+        if args.section:
+            print(
+                f"ERROR: --section only builds {args.section!r}, but publishing "
+                "replaces every run in the dataset. Use --no-upload with "
+                "--section, or run a full build to publish.",
+                file=sys.stderr,
+            )
+            return 2
 
     build_dir = Path(args.build_dir).resolve()
     if build_dir.exists():
@@ -147,18 +219,9 @@ def main() -> int:
         print(f"\nWrote {len(produced)} .nebo file(s) to {build_dir}. Skipping upload.")
         return 0
 
-    if not args.url or not args.api_token:
-        print(
-            "ERROR: --url and --api-token are required for upload. "
-            "Set NEBO_DEMOS_URL / NEBO_DEMOS_TOKEN, or pass --no-upload.",
-            file=sys.stderr,
-        )
-        return 2
+    upload(build_dir, args.dataset, args.hf_token)
 
-    for nebo_file in produced:
-        upload(nebo_file, args.url, args.api_token)
-
-    print(f"\nUploaded {len(produced)} run(s) to {args.url}")
+    print(f"\nPublished {len(produced)} run(s) to hf://datasets/{args.dataset}")
     return 0
 
 

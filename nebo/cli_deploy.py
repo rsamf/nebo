@@ -114,20 +114,124 @@ def _generate_token(prefix: str = "nb_") -> str:
     return prefix + "".join(secrets.choice(alphabet) for _ in range(32))
 
 
-def _render_readme(space_id: str) -> str:
+_PUSH_INTAKE = """\
+## Connect from Python
+
+```python
+import nebo as nb
+
+nb.init(
+    uri="https://${space_url}",
+    api_token="<your NEBO_API_TOKEN>",
+)
+
+@nb.fn()
+def step():
+    nb.log_text("status", "hello from a remote Space")
+    nb.log_line("loss", 0.42)
+
+step()
+```
+
+The token must match the `NEBO_API_TOKEN` Space secret. To rotate it,
+edit the secret in this Space's Settings panel."""
+
+_BUCKET_INTAKE = """\
+## Where the runs come from
+
+This Space serves runs out of [`${logdir_repo}`](https://huggingface.co/\
+datasets/${logdir_repo}) rather than its own disk, so it holds no durable
+state — it can be rebuilt or scaled to zero and the same runs come back.
+
+It therefore does **not** accept runs pushed over the network. Log locally
+and publish the `.nebo` files to that dataset:
+
+```python
+import nebo as nb
+
+@nb.fn()
+def step():
+    nb.log_text("status", "hello")
+    nb.log_line("loss", 0.42)
+
+step()   # writes ./.nebo/<timestamp>_<run_id>.nebo
+```
+
+```python
+from huggingface_hub import HfApi
+
+HfApi().upload_folder(
+    folder_path=".nebo",
+    repo_id="${logdir_repo}",
+    repo_type="dataset",
+    allow_patterns=["*.nebo"],
+    delete_patterns=["*.nebo"],   # replace, rather than accumulate
+)
+```
+
+The daemon picks them up on its next scan."""
+
+
+def _render_readme(space_id: str, logdir: Optional[str] = None) -> str:
     """Substitute the template's ${space_url} / ${title} placeholders."""
     tmpl_path = _SPACES_TEMPLATE_DIR / "README.md.tmpl"
     tmpl = Template(tmpl_path.read_text(encoding="utf-8"))
     # HF Spaces URLs replace `/` with `-` and lowercase the slug.
     space_url = f"{space_id.replace('/', '-').lower()}.hf.space"
-    return tmpl.substitute(title="Nebo Dashboard", space_url=space_url)
+    if logdir:
+        from nebo.server.workspace import parse_hf_uri
+
+        intake = Template(_BUCKET_INTAKE).substitute(
+            logdir_repo=parse_hf_uri(logdir).repo_id,
+        )
+    else:
+        intake = Template(_PUSH_INTAKE).substitute(space_url=space_url)
+    return tmpl.substitute(
+        title="Nebo Dashboard", space_url=space_url, intake_block=intake,
+    )
 
 
-def _render_dockerfile(install_block: str) -> str:
-    """Substitute the install command into the Dockerfile template."""
+# The Space's working directory is ephemeral and its /data volume only
+# persists if the Space has paid storage attached, so the two intake modes
+# below are the durable-vs-not choice a deployer makes.
+_DATA_COMMENT = """\
+# Hugging Face Spaces persistent volume mounts at /data. The daemon runs
+# in remote mode (--remote /data) so incoming network runs are persisted
+# there and survive Space restarts. The directory watcher (--logdir) is
+# disabled because the Space's working directory is ephemeral — nothing
+# else would ever write there (--remote satisfies --no-local's intake
+# requirement).
+
+# NOTE: /data only survives a restart if this Space has persistent storage
+# attached. Without it, a Space that scales to zero loses every run. Deploy
+# with `nebo deploy --logdir hf://datasets/<owner>/<name>` to read runs from
+# a Hub repo instead, which is durable regardless."""
+
+_BUCKET_COMMENT = """\
+# Runs are read from a Hugging Face repo rather than local disk, so this
+# Space holds no durable state: it can be rebuilt or scaled to zero and
+# still serve the same runs. The daemon rebuilds its run list from the
+# .nebo file headers in the bucket on every cold start. Network run
+# creation is rejected (no --remote) — the bucket is the only intake."""
+
+
+def _serve_argv(logdir: Optional[str]) -> list[str]:
+    """The `nebo serve` command line the Space runs."""
+    argv = ["nebo", "serve", "--host", "0.0.0.0", "--port", "7860"]
+    if logdir:
+        return argv + ["--logdir", logdir]
+    return argv + ["--remote", "/data", "--no-local"]
+
+
+def _render_dockerfile(install_block: str, logdir: Optional[str] = None) -> str:
+    """Substitute the install command and serve args into the template."""
     tmpl_path = _SPACES_TEMPLATE_DIR / "Dockerfile.tmpl"
     tmpl = Template(tmpl_path.read_text(encoding="utf-8"))
-    return tmpl.substitute(install_block=install_block)
+    return tmpl.substitute(
+        install_block=install_block,
+        serve_comment=_BUCKET_COMMENT if logdir else _DATA_COMMENT,
+        serve_args=", ".join(f'"{a}"' for a in _serve_argv(logdir)),
+    )
 
 
 def _build_wheel(out_dir: Path) -> Path:
@@ -186,6 +290,24 @@ def cmd_deploy(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
+    logdir = getattr(args, "logdir", None)
+    if logdir:
+        from nebo.server.workspace import WorkspaceError, is_remote_uri, parse_hf_uri
+
+        if not is_remote_uri(logdir):
+            print(
+                f"Error: --logdir must be an hf:// URI (got {logdir!r}).\n"
+                "  A Space has no durable local disk to point at — use e.g.\n"
+                "  --logdir hf://datasets/<owner>/<name>",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        try:
+            parse_hf_uri(logdir)
+        except WorkspaceError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+
     api = HfApi(token=args.hf_token)
 
     print(f"Ensuring Space {space_id} exists...")
@@ -233,6 +355,10 @@ def cmd_deploy(args: argparse.Namespace) -> None:
     # from PyPI; with --from-source we build a wheel locally and ship
     # it alongside the Dockerfile so the Space runs the current
     # checkout instead of the last published release.
+    # A bucket logdir needs huggingface_hub inside the Space, which only the
+    # `deploy` extra provides. Without it the daemon raises WorkspaceError
+    # while building its run tree and the Space never serves a single request.
+    extra = "[deploy]" if logdir else ""
     wheel_path: Optional[Path] = None
     if getattr(args, "from_source", False):
         tmp = Path(tempfile.mkdtemp(prefix="nebo-deploy-"))
@@ -241,13 +367,27 @@ def cmd_deploy(args: argparse.Namespace) -> None:
         # wheels because it parses version/abi/platform from the name.
         install_block = (
             f"COPY {wheel_path.name} /tmp/\n"
-            f"RUN pip install --no-cache-dir /tmp/{wheel_path.name}"
+            f"RUN pip install --no-cache-dir '/tmp/{wheel_path.name}{extra}'"
         )
     else:
-        install_block = "RUN pip install --no-cache-dir 'nebo'"
+        install_block = f"RUN pip install --no-cache-dir 'nebo{extra}'"
 
-    dockerfile = _render_dockerfile(install_block)
-    readme = _render_readme(space_id)
+    # An HF token on the Space is only needed to *write* the run tree back to
+    # the bucket. It is never derived from the ambient deploy credential:
+    # that token is usually full-scope, and a Space secret is a much wider
+    # blast radius than a one-off CLI invocation.
+    hf_secret = getattr(args, "hf_token_secret", None)
+    if hf_secret:
+        print("Setting HF_TOKEN secret on the Space...")
+        api.add_space_secret(
+            repo_id=space_id,
+            key="HF_TOKEN",
+            value=hf_secret,
+            description="Hugging Face token the daemon uses for its hf:// logdir.",
+        )
+
+    dockerfile = _render_dockerfile(install_block, logdir)
+    readme = _render_readme(space_id, logdir)
 
     print("Uploading Dockerfile and README...")
     api.upload_file(
@@ -290,6 +430,14 @@ def cmd_deploy(args: argparse.Namespace) -> None:
     print(f"  Space:    https://huggingface.co/spaces/{space_id}")
     print(f"  URL:      {space_url}")
     print(f"  Access:   read={read_mode}, write={write_mode}")
+    if logdir:
+        print(f"  Logdir:   {logdir}")
+        if not hf_secret:
+            print(
+                "            (read-only: no HF_TOKEN secret set, so run-tree\n"
+                "             edits stay in memory. Pass --hf-token-secret to\n"
+                "             persist them.)"
+            )
     print()
     print("Connect your SDK by setting these env vars locally:")
     print(f"  export NEBO_URI={space_url}")
