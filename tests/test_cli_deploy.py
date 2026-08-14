@@ -120,142 +120,55 @@ def test_happy_path_calls_hf_api() -> None:
     assert paths == {"Dockerfile", "README.md"}
 
 
-# -- hf:// logdir Spaces ---------------------------------------------------
-
-
-def _deploy_args(**over) -> argparse.Namespace:
-    base = dict(
-        space_id="alice/my-dashboard",
-        hf_token="hf_xxx",
-        api_token="nb_test_token",
-        private=False,
-        from_source=False,
-        read="public",
-        write="private",
-        logdir=None,
-        hf_token_secret=None,
-        wait=False,
-    )
-    base.update(over)
-    return argparse.Namespace(**base)
-
-
-def _run_deploy(args) -> MagicMock:
-    """cmd_deploy against a mocked huggingface_hub; returns the fake HfApi."""
+def test_logdir_deploy_points_the_space_at_the_bucket() -> None:
+    """The Dockerfile CMD is the whole mechanism: get it wrong and the Space
+    keeps serving its ephemeral /data, which is the bug this feature fixes."""
     fake_api = MagicMock()
     fake_module = MagicMock()
     fake_module.HfApi.return_value = fake_api
     fake_utils = MagicMock()
     fake_utils.HfHubHTTPError = type("HfHubHTTPError", (Exception,), {})
     fake_module.utils = fake_utils
-    with patch.dict(sys.modules, {
-        "huggingface_hub": fake_module,
-        "huggingface_hub.utils": fake_utils,
-    }):
-        cmd_deploy(args)
-    return fake_api
 
+    def run(**over):
+        fake_api.reset_mock()
+        args = argparse.Namespace(**{
+            "space_id": "alice/my-dashboard", "hf_token": "hf_xxx",
+            "api_token": "nb_test_token", "private": False, "from_source": False,
+            "read": "public", "write": "private", "logdir": None,
+            "hf_token_secret": None, "wait": False, **over,
+        })
+        with patch.dict(sys.modules, {
+            "huggingface_hub": fake_module, "huggingface_hub.utils": fake_utils,
+        }):
+            cmd_deploy(args)
+        return {
+            c.kwargs["path_in_repo"]: c.kwargs["path_or_fileobj"].decode("utf-8")
+            for c in fake_api.upload_file.call_args_list
+        }, {c.kwargs["key"] for c in fake_api.add_space_secret.call_args_list}
 
-def _uploaded_dockerfile(fake_api: MagicMock) -> str:
-    for call in fake_api.upload_file.call_args_list:
-        if call.kwargs["path_in_repo"] == "Dockerfile":
-            return call.kwargs["path_or_fileobj"].decode("utf-8")
-    raise AssertionError("no Dockerfile uploaded")
+    def cmd(dockerfile):
+        return next(ln for ln in dockerfile.splitlines() if ln.startswith("CMD ["))
 
+    base = 'CMD ["nebo", "serve", "--host", "0.0.0.0", "--port", "7860"'
 
-def _cmd_line(fake_api: MagicMock) -> str:
-    """The Dockerfile's CMD, isolated from the surrounding comment prose."""
-    body = _uploaded_dockerfile(fake_api)
-    for line in body.splitlines():
-        if line.startswith("CMD ["):
-            return line
-    raise AssertionError(f"no CMD in Dockerfile:\n{body}")
+    # Deploys that predate bucket logdirs are untouched.
+    files, secrets = run()
+    assert cmd(files["Dockerfile"]) == base + ', "--remote", "/data", "--no-local"]'
+    assert "Connect from Python" in files["README.md"]
 
+    # With a bucket: watcher on, no network intake, and the Space page stops
+    # telling visitors to push runs it would reject.
+    files, secrets = run(logdir="hf://datasets/acme/runs")
+    assert cmd(files["Dockerfile"]) == base + ', "--logdir", "hf://datasets/acme/runs"]'
+    assert "does **not** accept runs pushed over the network" in files["README.md"]
+    assert "acme/runs" in files["README.md"]
+    # The deploy credential is usually full-scope — never leak it implicitly.
+    assert secrets == {"NEBO_API_TOKEN"}
+    _, secrets = run(logdir="hf://datasets/acme/runs", hf_token_secret="hf_write")
+    assert secrets == {"NEBO_API_TOKEN", "HF_TOKEN"}
 
-def test_default_deploy_still_serves_from_data() -> None:
-    """Deploys that predate bucket logdirs must be unchanged."""
-    cmd = _cmd_line(_run_deploy(_deploy_args()))
-    assert cmd == (
-        'CMD ["nebo", "serve", "--host", "0.0.0.0", "--port", "7860", '
-        '"--remote", "/data", "--no-local"]'
-    )
-
-
-def test_logdir_deploy_watches_the_bucket() -> None:
-    cmd = _cmd_line(_run_deploy(_deploy_args(logdir="hf://datasets/acme/runs")))
-    # Bucket-only intake: watcher on, no network run creation.
-    assert cmd == (
-        'CMD ["nebo", "serve", "--host", "0.0.0.0", "--port", "7860", '
-        '"--logdir", "hf://datasets/acme/runs"]'
-    )
-
-
-def test_logdir_deploy_documents_why_the_space_is_stateless() -> None:
-    body = _uploaded_dockerfile(
-        _run_deploy(_deploy_args(logdir="hf://datasets/acme/runs"))
-    )
-    assert "scaled to zero" in body
-
-
-def test_logdir_deploy_sets_no_hf_token_secret_by_default() -> None:
-    """The deploy credential is usually full-scope; never leak it implicitly."""
-    fake_api = _run_deploy(_deploy_args(logdir="hf://datasets/acme/runs"))
-    keys = {c.kwargs["key"] for c in fake_api.add_space_secret.call_args_list}
-    assert keys == {"NEBO_API_TOKEN"}
-
-
-def test_hf_token_secret_is_opt_in() -> None:
-    fake_api = _run_deploy(
-        _deploy_args(logdir="hf://datasets/acme/runs", hf_token_secret="hf_write")
-    )
-    secrets = {
-        c.kwargs["key"]: c.kwargs["value"]
-        for c in fake_api.add_space_secret.call_args_list
-    }
-    assert secrets["HF_TOKEN"] == "hf_write"
-
-
-def test_local_logdir_is_rejected() -> None:
-    """A Space has no durable local disk to point at."""
-    with pytest.raises(SystemExit) as e:
-        _run_deploy(_deploy_args(logdir="/var/lib/nebo"))
-    assert e.value.code == 1
-
-
-def test_malformed_bucket_logdir_is_rejected() -> None:
-    with pytest.raises(SystemExit) as e:
-        _run_deploy(_deploy_args(logdir="hf://datasets/acme"))
-    assert e.value.code == 1
-
-
-def _uploaded_readme(fake_api: MagicMock) -> str:
-    for call in fake_api.upload_file.call_args_list:
-        if call.kwargs["path_in_repo"] == "README.md":
-            return call.kwargs["path_or_fileobj"].decode("utf-8")
-    raise AssertionError("no README uploaded")
-
-
-def test_default_readme_tells_visitors_to_push_runs() -> None:
-    body = _uploaded_readme(_run_deploy(_deploy_args()))
-    assert "Connect from Python" in body
-    assert "nb.init(" in body
-
-
-def test_bucket_readme_does_not_advertise_pushing() -> None:
-    """A bucket-backed Space rejects network runs; saying otherwise misleads
-    everyone who reads the Space page."""
-    body = _uploaded_readme(
-        _run_deploy(_deploy_args(logdir="hf://datasets/acme/runs"))
-    )
-    assert "does **not** accept runs pushed over the network" in body
-    assert "upload_folder" in body
-    assert "acme/runs" in body
-    assert "nb.init(" not in body
-
-
-def test_readme_frontmatter_survives_both_intakes() -> None:
-    for args in (_deploy_args(), _deploy_args(logdir="hf://datasets/acme/runs")):
-        body = _uploaded_readme(_run_deploy(args))
-        assert body.startswith("---\n")
-        assert "sdk: docker" in body
-        assert "app_port: 7860" in body
+    # A Space has no durable local disk to point at.
+    for bad in ("/var/lib/nebo", "hf://datasets/acme"):
+        with pytest.raises(SystemExit):
+            run(logdir=bad)

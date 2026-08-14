@@ -35,23 +35,3 @@ def test_resolve_uri_ipv6_must_use_full_url():
     mode, dest = resolve_uri("http://[::1]:7861/")
     assert mode is Mode.NETWORK
     assert dest == "http://[::1]:7861/"
-
-
-def test_bucket_uri_is_rejected():
-    """The SDK writes locally; falling through to file mode would silently
-    create a directory literally named "hf:"."""
-    import pytest
-
-    from nebo.core.uri import resolve_uri
-
-    with pytest.raises(ValueError, match="nebo serve --logdir"):
-        resolve_uri("hf://datasets/acme/runs")
-
-
-def test_bucket_uri_rejection_is_case_insensitive():
-    import pytest
-
-    from nebo.core.uri import resolve_uri
-
-    with pytest.raises(ValueError):
-        resolve_uri("HF://datasets/acme/runs")

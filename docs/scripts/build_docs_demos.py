@@ -129,7 +129,12 @@ def upload(build_dir: Path, dataset: str, token: str | None) -> None:
 
     api = HfApi(token=token)
     print(f"Ensuring dataset {dataset} exists...")
-    api.create_repo(repo_id=dataset, repo_type="dataset", exist_ok=True)
+    # Created on first run, so there is nothing to set up by hand. Public on
+    # purpose: the demos Space reads this repo anonymously (no HF_TOKEN secret
+    # is set on it), so a private dataset would serve zero runs.
+    api.create_repo(
+        repo_id=dataset, repo_type="dataset", private=False, exist_ok=True,
+    )
 
     files = sorted(p.name for p in build_dir.glob("*.nebo"))
     print(f"Uploading {len(files)} run(s) to hf://datasets/{dataset}:")

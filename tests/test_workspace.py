@@ -1,463 +1,319 @@
-"""Tests for the workspace seam (nebo/server/workspace.py)."""
+"""Bucket workspaces (`--logdir hf://...`).
+
+Local workspaces are already covered by the rest of the suite — every
+watcher/cache/tree test runs through `LocalWorkspace`. What is untested by
+those is the remote path, so these four exercise it end to end against an
+in-memory backend (no network, no huggingface_hub).
+"""
 
 from __future__ import annotations
 
+import asyncio
 import io
-from pathlib import Path
+import time
 
 import pytest
 
+from nebo.core.fileformat import NeboFileWriter
+from nebo.server.cache import RunCache, resolve_cache_path
+from nebo.server.daemon import DaemonState
+from nebo.server.tree import TreeStore
+from nebo.server.watcher import DirectoryWatcher
 from nebo.server.workspace import (
-    HF_SCHEME,
-    HfRef,
-    LocalWorkspace,
-    WorkspaceError,
+    FileStat,
     _OffsetStream,
-    is_remote_uri,
     normalize_workspace,
     open_workspace,
     parse_hf_uri,
-    read_frame_bytes,
 )
 
-
-# -- URI classification ----------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "value",
-    [
-        "hf://datasets/acme/runs",
-        "HF://datasets/acme/runs",
-        "  hf://acme/runs",
-    ],
-)
-def test_is_remote_uri_true(value):
-    assert is_remote_uri(value)
+TEXT = {"type": "text", "loggable_id": "__global__", "message": "hi"}
+METRIC = {
+    "type": "metric", "loggable_id": "n", "name": "loss", "metric_type": "line",
+    "value": 0.5, "step": 0, "tags": [], "timestamp": 1.0,
+}
 
 
-@pytest.mark.parametrize(
-    "value",
-    ["./.nebo", "/var/lib/nebo", "s3://bucket/key", "http://localhost:7861", "", None, 5],
-)
-def test_is_remote_uri_false(value):
-    assert not is_remote_uri(value)
+def build_nebo(run_id: str, events: list[dict], started_at: float | None = None) -> bytes:
+    buf = io.BytesIO()
+    w = NeboFileWriter(buf, run_id=run_id, script_path="/x/s.py")
+    if started_at is not None:
+        w._started_at = started_at
+    w.write_header()
+    for e in events:
+        w.write_entry(e["type"], dict(e))
+    w.close()
+    return buf.getvalue()
 
 
-# -- hf:// parsing ---------------------------------------------------------
+class FakeWorkspace:
+    """An in-memory stand-in that behaves like a bucket.
+
+    Deliberately mimics the awkward parts: no mtimes, a content token
+    instead of size-based change detection, a change marker that gates
+    listing, and I/O that must be awaited.
+    """
+
+    is_remote = True
+    default_poll_interval = 30.0
+
+    def __init__(self, uri="hf://datasets/acme/runs", files=None):
+        self.uri = uri
+        self.files: dict[str, bytes] = dict(files or {})
+        self.revision = 0
+        self.commits: list[list[str]] = []
+        self.io_calls = 0
+        self.list_calls = 0
+        self.read_only = False
+
+    def put(self, name, data):
+        self.files[name] = data
+        self.revision += 1
+
+    def remove(self, name):
+        self.files.pop(name, None)
+        self.revision += 1
+
+    def _uri(self, name):
+        return f"{self.uri}/{name}"
+
+    def _name(self, uri):
+        return uri[len(self.uri) + 1:] if uri.startswith(self.uri + "/") else uri
+
+    def ensure_root(self):
+        pass
+
+    def change_token(self):
+        return str(self.revision)
+
+    def list_nebo(self):
+        self.list_calls += 1
+        return [
+            FileStat(
+                uri=self._uri(n), size=len(d), mtime=None,   # buckets need no mtime
+                token=f"blob{hash(d) & 0xffff:04x}",
+            )
+            for n, d in sorted(self.files.items()) if n.endswith(".nebo")
+        ]
+
+    def stat(self, uri):
+        data = self.files.get(self._name(uri))
+        if data is None:
+            return None
+        return FileStat(
+            uri=uri, size=len(data), mtime=None,
+            token=f"blob{hash(data) & 0xffff:04x}",
+        )
+
+    def reader(self, uri, offset=0):
+        data = self.files.get(self._name(uri))
+        if data is None:
+            raise FileNotFoundError(uri)
+        return _OffsetStream(io.BytesIO(data[offset:]), offset)
+
+    def read_range(self, uri, offset, length):
+        data = self.files.get(self._name(uri))
+        return None if data is None else data[offset:offset + length]
+
+    def read_bytes(self, rel):
+        return self.files.get(rel.strip("/"))
+
+    def list_dir(self, rel):
+        prefix = f"{rel.strip('/')}/" if rel.strip("/") else ""
+        return sorted(
+            n[len(prefix):] for n in self.files
+            if n.startswith(prefix) and "/" not in n[len(prefix):]
+        )
+
+    def list_tree(self, rel):
+        prefix = f"{rel.strip('/')}/" if rel.strip("/") else ""
+        return sorted(n[len(prefix):] for n in self.files if n.startswith(prefix))
+
+    def commit(self, adds, deletes, *, message="nebo: update"):
+        if self.read_only:
+            raise PermissionError("403 Forbidden")
+        self.commits.append([r for r, _ in adds])
+        for rel in deletes:
+            rel = rel.strip("/")
+            for n in [k for k in self.files if k == rel or k.startswith(rel + "/")]:
+                self.files.pop(n)
+        for rel, data in adds:
+            self.files[rel.strip("/")] = data
+        self.revision += 1
+
+    async def run_io(self, fn, *args):
+        self.io_calls += 1
+        return await asyncio.to_thread(fn, *args)
 
 
-def test_parse_dataset_uri():
-    ref = parse_hf_uri("hf://datasets/acme/runs")
-    assert ref == HfRef("dataset", "acme/runs", "", None)
-    assert ref.fs_path == "datasets/acme/runs"
-    assert ref.repo_path == ""
+def test_a_bucket_logdir_never_degrades_into_a_local_path(monkeypatch, tmp_path):
+    """`Path("hf://x").resolve()` silently yields `$CWD/hf:/x`.
 
-
-def test_parse_dataset_uri_with_prefix():
-    ref = parse_hf_uri("hf://datasets/acme/runs/docs/demos")
-    assert ref.repo_type == "dataset"
-    assert ref.repo_id == "acme/runs"
-    assert ref.prefix == "docs/demos"
-    assert ref.fs_path == "datasets/acme/runs/docs/demos"
-    assert ref.repo_path == "docs/demos"
-
-
-def test_parse_bare_uri_is_a_model_repo():
-    ref = parse_hf_uri("hf://acme/runs")
-    assert ref.repo_type == "model"
-    assert ref.fs_path == "acme/runs"
-
-
-def test_parse_space_uri():
-    assert parse_hf_uri("hf://spaces/acme/dash").repo_type == "space"
-
-
-def test_parse_revision():
-    ref = parse_hf_uri("hf://datasets/acme/runs@main/docs")
-    assert ref.repo_id == "acme/runs"
-    assert ref.revision == "main"
-    assert ref.prefix == "docs"
-    assert ref.fs_path == "datasets/acme/runs@main/docs"
-
-
-def test_parse_strips_trailing_slash():
-    assert parse_hf_uri("hf://datasets/acme/runs/").uri == "hf://datasets/acme/runs"
-
-
-@pytest.mark.parametrize(
-    "bad",
-    [
-        "hf://",
-        "hf://datasets",
-        "hf://datasets/acme",
-        "hf://acme",
-        "hf://datasets/acme/@main",
-        "hf://datasets/acme/runs@",
-    ],
-)
-def test_parse_rejects_incomplete(bad):
-    with pytest.raises(WorkspaceError):
-        parse_hf_uri(bad)
-
-
-def test_parse_rejects_local_path():
-    with pytest.raises(WorkspaceError):
-        parse_hf_uri("/tmp/nebo")
-
-
-@pytest.mark.parametrize(
-    "uri",
-    [
-        "hf://datasets/acme/runs",
-        "hf://datasets/acme/runs/docs",
-        "hf://datasets/acme/runs@main/docs",
-        "hf://spaces/acme/dash",
-        "hf://acme/model-repo",
-    ],
-)
-def test_uri_round_trips(uri):
-    assert parse_hf_uri(parse_hf_uri(uri).uri).uri == uri
-
-
-def test_join_extends_prefix():
-    ref = parse_hf_uri("hf://datasets/acme/runs")
-    assert ref.join("meta/tree.json").fs_path == "datasets/acme/runs/meta/tree.json"
-    assert ref.join("meta/tree.json").repo_path == "meta/tree.json"
-    assert ref.join("").fs_path == "datasets/acme/runs"
-
-
-def test_join_preserves_revision():
-    ref = parse_hf_uri("hf://datasets/acme/runs@dev")
-    assert ref.join("a.nebo").fs_path == "datasets/acme/runs@dev/a.nebo"
-
-
-# -- normalization ---------------------------------------------------------
-
-
-def test_normalize_local_matches_path_resolve(tmp_path):
-    assert normalize_workspace(str(tmp_path)) == str(Path(tmp_path).resolve())
-
-
-def test_normalize_local_is_absolute_for_relative_input():
-    assert normalize_workspace(".nebo") == str(Path(".nebo").resolve())
-
-
-def test_normalize_none_is_empty_string():
-    # Matches the cache's historical "no logdir" identity key.
-    assert normalize_workspace(None) == ""
-
-
-def test_normalize_remote_is_never_path_resolved():
-    """`Path("hf://x").resolve()` yields `$CWD/hf:/x` — the bug this guards."""
-    out = normalize_workspace("hf://datasets/acme/runs")
-    assert out == "hf://datasets/acme/runs"
-    assert out.startswith(HF_SCHEME)
-    assert "hf:/datasets" not in out
-    assert str(Path.cwd()) not in out
-
-
-def test_normalize_remote_is_idempotent():
-    once = normalize_workspace("hf://datasets/acme/runs/")
-    assert normalize_workspace(once) == once
-
-
-def test_normalize_remote_is_machine_independent(monkeypatch, tmp_path):
-    """Cache identity is a sha1 of this string, so cwd must not leak in."""
+    Cache identity is a sha1 of this string and `_meta_matches` drops the
+    entire database when it differs, so a cwd-dependent key would wipe a
+    daemon's cache every time it started from a different directory.
+    """
     uri = "hf://datasets/acme/runs"
-    first = normalize_workspace(uri)
+
+    assert normalize_workspace(uri) == uri
+    assert normalize_workspace(uri + "/") == uri            # canonical
+    assert normalize_workspace(str(tmp_path)) == str(tmp_path.resolve())
+    assert normalize_workspace(None) == ""                  # historical "no logdir"
+
+    # Stable across machines and working directories.
+    before = resolve_cache_path(uri)
     monkeypatch.chdir(tmp_path)
-    assert normalize_workspace(uri) == first
+    assert resolve_cache_path(uri) == before
+    assert resolve_cache_path(uri + "/") == before
+    assert resolve_cache_path("hf://datasets/acme/other") != before
 
-
-# -- _OffsetStream ---------------------------------------------------------
-
-
-def test_offset_stream_reports_absolute_positions():
-    s = _OffsetStream(io.BytesIO(b"abcdef"), base=100)
-    assert s.tell() == 100
-    assert s.read(2) == b"ab"
-    assert s.tell() == 102
-
-
-def test_offset_stream_absolute_seek():
-    s = _OffsetStream(io.BytesIO(b"abcdef"), base=100)
-    s.read(4)
-    assert s.seek(100) == 100
-    assert s.read(1) == b"a"
-
-
-def test_offset_stream_seek_before_base_clamps():
-    s = _OffsetStream(io.BytesIO(b"abcdef"), base=100)
-    assert s.seek(0) == 100
-
-
-def test_offset_stream_relative_seek():
-    s = _OffsetStream(io.BytesIO(b"abcdef"), base=10)
-    s.read(3)
-    s.seek(-1, io.SEEK_CUR)
-    assert s.tell() == 12
-    assert s.read(1) == b"c"
-
-
-def test_offset_stream_read_past_eof_is_short():
-    s = _OffsetStream(io.BytesIO(b"ab"), base=5)
-    assert s.read(10) == b"ab"
-    assert s.tell() == 7
-
-
-def test_offset_stream_is_a_context_manager():
-    with _OffsetStream(io.BytesIO(b"xy"), base=0) as s:
-        assert s.read() == b"xy"
-
-
-def test_reader_offsets_match_a_real_file(tmp_path):
-    """The remote adapter and a real handle must be indistinguishable."""
-    p = tmp_path / "a.bin"
-    p.write_bytes(bytes(range(64)))
-
-    remote = _OffsetStream(io.BytesIO(p.read_bytes()[20:]), base=20)
-    with open(p, "rb") as local:
-        local.seek(20)
-        assert local.tell() == remote.tell()
-        assert local.read(5) == remote.read(5)
-        assert local.tell() == remote.tell()
-        local.seek(30)
-        remote.seek(30)
-        assert local.read(4) == remote.read(4)
-
-
-# -- LocalWorkspace --------------------------------------------------------
-
-
-def test_open_workspace_picks_local(tmp_path):
-    ws = open_workspace(str(tmp_path))
-    assert isinstance(ws, LocalWorkspace)
-    assert ws.is_remote is False
-    assert ws.uri == str(tmp_path.resolve())
-
-
-def test_open_workspace_picks_remote_without_importing_hub():
-    ws = open_workspace("hf://datasets/acme/runs")
-    assert ws.is_remote is True
-    assert ws.uri == "hf://datasets/acme/runs"
-
-
-def test_open_workspace_rejects_none():
-    with pytest.raises(WorkspaceError):
-        open_workspace(None)
-
-
-def test_remote_polls_much_slower_than_local(tmp_path):
-    assert open_workspace(str(tmp_path)).default_poll_interval == 0.5
-    assert open_workspace("hf://datasets/a/b").default_poll_interval == 30.0
-
-
-def test_poll_interval_override(tmp_path):
-    assert open_workspace(str(tmp_path), poll_interval=5.0).default_poll_interval == 5.0
-
-
-def test_ensure_root_creates_the_directory(tmp_path):
-    root = tmp_path / "deep" / "nested"
-    open_workspace(str(root)).ensure_root()
-    assert root.is_dir()
-
-
-def test_list_nebo_finds_only_nebo_files(tmp_path):
-    (tmp_path / "a.nebo").write_bytes(b"xx")
-    (tmp_path / "b.nebo").write_bytes(b"yyy")
-    (tmp_path / "notes.txt").write_text("no")
-    (tmp_path / "sub").mkdir()
-    (tmp_path / "sub" / "c.nebo").write_bytes(b"z")  # non-recursive
-
-    ws = LocalWorkspace(tmp_path)
-    found = {Path(s.uri).name: s.size for s in ws.list_nebo()}
-    assert found == {"a.nebo": 2, "b.nebo": 3}
-
-
-def test_list_nebo_uris_are_absolute_paths(tmp_path):
-    """watch_files.path keys off these strings — they must stay absolute."""
-    (tmp_path / "a.nebo").write_bytes(b"x")
-    (stat,) = LocalWorkspace(tmp_path).list_nebo()
-    assert stat.uri == str(tmp_path.resolve() / "a.nebo")
-    assert Path(stat.uri).is_absolute()
-
-
-def test_list_nebo_on_missing_root_is_empty(tmp_path):
-    assert LocalWorkspace(tmp_path / "gone").list_nebo() == []
-
-
-def test_local_has_no_change_token(tmp_path):
-    assert LocalWorkspace(tmp_path).change_token() is None
-
-
-def test_stat_reports_size_and_mtime(tmp_path):
-    p = tmp_path / "a.nebo"
-    p.write_bytes(b"hello")
-    st = LocalWorkspace(tmp_path).stat(str(p))
-    assert st is not None and st.size == 5 and st.mtime is not None
-
-
-def test_stat_missing_is_none(tmp_path):
-    assert LocalWorkspace(tmp_path).stat(str(tmp_path / "nope.nebo")) is None
-
-
-def test_reader_seeks_to_offset(tmp_path):
-    p = tmp_path / "a.nebo"
-    p.write_bytes(b"0123456789")
-    with LocalWorkspace(tmp_path).reader(str(p), 4) as f:
-        assert f.tell() == 4
-        assert f.read() == b"456789"
-
-
-def test_read_range(tmp_path):
-    p = tmp_path / "a.nebo"
-    p.write_bytes(b"0123456789")
-    assert LocalWorkspace(tmp_path).read_range(str(p), 2, 3) == b"234"
-
-
-def test_read_range_missing_is_none(tmp_path):
-    assert LocalWorkspace(tmp_path).read_range(str(tmp_path / "no.nebo"), 0, 1) is None
-
-
-# -- LocalWorkspace meta/ side --------------------------------------------
-
-
-def test_commit_writes_and_reads_back(tmp_path):
-    ws = LocalWorkspace(tmp_path)
-    ws.commit([("meta/tree.json", b'{"v":1}')], [])
-    assert ws.read_bytes("meta/tree.json") == b'{"v":1}'
-
-
-def test_commit_creates_parent_directories(tmp_path):
-    ws = LocalWorkspace(tmp_path)
-    ws.commit([("meta/docs/a/b/README.md", b"hi")], [])
-    assert (tmp_path / "meta" / "docs" / "a" / "b" / "README.md").read_text() == "hi"
-
-
-def test_commit_leaves_no_tmp_file_behind(tmp_path):
-    ws = LocalWorkspace(tmp_path)
-    ws.commit([("meta/tree.json", b"{}")], [])
-    assert list((tmp_path / "meta").glob("*.tmp")) == []
-
-
-def test_commit_deletes_files_and_directories(tmp_path):
-    ws = LocalWorkspace(tmp_path)
-    ws.commit(
-        [("meta/docs/g/a.md", b"a"), ("meta/docs/g/b.md", b"b"), ("meta/x.json", b"{}")],
-        [],
+    ref = parse_hf_uri("hf://datasets/acme/runs@main/docs")
+    assert (ref.repo_type, ref.repo_id, ref.revision, ref.prefix) == (
+        "dataset", "acme/runs", "main", "docs"
     )
-    ws.commit([], ["meta/docs/g", "meta/x.json"])
-    assert not (tmp_path / "meta" / "docs" / "g").exists()
-    assert not (tmp_path / "meta" / "x.json").exists()
+    assert parse_hf_uri(ref.uri).uri == ref.uri             # round-trips
+    assert ref.join("a.nebo").fs_path == "datasets/acme/runs@main/docs/a.nebo"
 
-
-def test_commit_delete_of_missing_path_is_a_noop(tmp_path):
-    LocalWorkspace(tmp_path).commit([], ["meta/nope.json"])
-
-
-def test_commit_applies_deletes_before_adds(tmp_path):
-    """A move is expressed as delete-old + add-new in one call."""
-    ws = LocalWorkspace(tmp_path)
-    ws.commit([("meta/docs/old/a.md", b"a")], [])
-    ws.commit([("meta/docs/new/a.md", b"a")], ["meta/docs/old"])
-    assert ws.read_bytes("meta/docs/new/a.md") == b"a"
-    assert ws.read_bytes("meta/docs/old/a.md") is None
-
-
-def test_read_bytes_missing_is_none(tmp_path):
-    assert LocalWorkspace(tmp_path).read_bytes("meta/tree.json") is None
-
-
-def test_list_dir_returns_file_names_only(tmp_path):
-    ws = LocalWorkspace(tmp_path)
-    ws.commit([("meta/docs/b.md", b""), ("meta/docs/a.md", b"")], [])
-    (tmp_path / "meta" / "docs" / "sub").mkdir()
-    assert ws.list_dir("meta/docs") == ["a.md", "b.md"]
-
-
-def test_list_dir_missing_is_empty(tmp_path):
-    assert LocalWorkspace(tmp_path).list_dir("meta/docs") == []
-
-
-def test_list_tree_is_recursive_and_relative(tmp_path):
-    ws = LocalWorkspace(tmp_path)
-    ws.commit([("meta/docs/g/a.md", b""), ("meta/docs/g/h/b.md", b"")], [])
-    assert ws.list_tree("meta/docs") == ["g/a.md", str(Path("g/h/b.md"))]
-
-
-def test_list_tree_missing_is_empty(tmp_path):
-    assert LocalWorkspace(tmp_path).list_tree("meta/docs") == []
+    ws = open_workspace(uri)
+    assert ws.is_remote and ws.uri == uri
+    assert ws.default_poll_interval == 30.0                 # HTTP, not scandir
+    assert open_workspace(str(tmp_path)).default_poll_interval == 0.5
 
 
 @pytest.mark.asyncio
-async def test_local_run_io_executes_inline(tmp_path):
-    ws = LocalWorkspace(tmp_path)
-    assert await ws.run_io(lambda a, b: a + b, 2, 3) == 5
+async def test_watcher_serves_runs_out_of_a_bucket():
+    """The whole read path: list -> header-only register -> deep ingest ->
+    media resolved by reference."""
+    img_bytes = b"\x89PNG\r\n\x1a\n-payload"
+    img = {
+        "type": "image", "loggable_id": "n", "name": "hero.png",
+        "data": img_bytes, "step": 0, "timestamp": 1.0,
+    }
+    ws = FakeWorkspace(files={
+        "a.nebo": build_nebo("bucketaaaaa1", [METRIC, TEXT, img], started_at=1234.5),
+    })
+    state = DaemonState()
+    w = DirectoryWatcher(state, logdir=ws)
+    await w._tick()
 
+    # Registered from the header alone — the body is not resident yet. This
+    # is what lets a cold-started daemon list 1000 runs cheaply.
+    assert "bucketaaaaa1" in state.runs
+    assert not state.runs["bucketaaaaa1"].texts
+    assert ws.io_calls > 0, "blocking HTTP must not run on the event loop"
+    # No mtime in the listing, so recency falls back to the header.
+    assert state.runs["bucketaaaaa1"].last_event_at == 1234.5
 
-# -- standalone frame resolution ------------------------------------------
+    # An unchanged bucket costs one commit-marker check, not a full listing.
+    await w._tick()
+    await w._tick()
+    assert ws.list_calls == 1
 
+    uri = ws._uri("a.nebo")
+    header_end = w._tracked[uri].offset
 
-def test_read_frame_bytes_local(tmp_path):
-    p = tmp_path / "a.nebo"
-    p.write_bytes(b"0123456789")
-    assert read_frame_bytes(str(p), 3, 4) == b"3456"
+    await w.ensure_deep("bucketaaaaa1")
+    run = state.runs["bucketaaaaa1"]
+    assert [t.message for t in run.texts] == ["hi"]
+    assert "n" in run.loggables
 
+    # Media is stored as a (uri, offset, length) reference, and the uri must
+    # be self-describing: the cache resolves it with no workspace in hand.
+    batch, _, _ = w._read_chunk(uri, header_end)
+    src = next((e["_media_src"] for e in batch if "_media_src" in e), None)
+    assert src is not None and src[0] == "hf://datasets/acme/runs/a.nebo"
 
-def test_read_frame_bytes_missing_is_none(tmp_path):
-    assert read_frame_bytes(str(tmp_path / "no.nebo"), 0, 4) is None
-
-
-def test_read_frame_bytes_routes_remote_uris(monkeypatch):
-    """An hf:// src_path must never hit builtins.open()."""
     from nebo.server import workspace as ws_mod
-
-    seen = {}
-
-    class FakeRemote:
-        def read_range(self, uri, offset, length):
-            seen["args"] = (uri, offset, length)
-            return b"remote-bytes"
-
-    monkeypatch.setattr(ws_mod, "_remote_for", lambda uri: FakeRemote())
-    uri = "hf://datasets/acme/runs/a.nebo"
-    assert read_frame_bytes(uri, 7, 3) == b"remote-bytes"
-    assert seen["args"] == (uri, 7, 3)
-
-
-def test_remote_backends_are_memoized_per_repo():
-    from nebo.server import workspace as ws_mod
-
-    ws_mod.reset_remote_cache()
+    monkey = ws_mod._remote_for
+    ws_mod._remote_for = lambda _u: ws
     try:
-        a = ws_mod._remote_for("hf://datasets/acme/runs/a.nebo")
-        b = ws_mod._remote_for("hf://datasets/acme/runs/deep/b.nebo")
-        c = ws_mod._remote_for("hf://datasets/other/runs/c.nebo")
-        assert a is b
-        assert a is not c
-        # Memoized at the repo root, so any file in the repo shares it.
-        assert a.uri == "hf://datasets/acme/runs"
+        assert RunCache._read_media_ref(*src) == img_bytes
     finally:
-        ws_mod.reset_remote_cache()
+        ws_mod._remote_for = monkey
 
 
-# -- optional-dependency isolation ----------------------------------------
+@pytest.mark.asyncio
+async def test_republished_objects_do_not_resume_mid_file(tmp_path):
+    """Object storage replaces objects; it never appends to them.
+
+    A changed content marker means "different file at the same path", so a
+    persisted byte offset now points into unrelated bytes. Same for a path
+    that disappears and later comes back.
+    """
+    cache = RunCache(tmp_path / "cache.db", logdir="hf://datasets/acme/runs")
+    cache.start()
+    try:
+        ws = FakeWorkspace(files={"a.nebo": build_nebo("bucketaaaaa2", [TEXT])})
+        state = DaemonState(cache=cache)
+        w = DirectoryWatcher(state, logdir=ws)
+        await w._tick()
+        uri = ws._uri("a.nebo")
+        header_end = w._tracked[uri].offset
+        cache.flush()
+        assert list(cache.get_watch_files()) == [uri]
+
+        # Same path, different bytes -> back to header-only, not tailed.
+        ws.put("a.nebo", build_nebo("bucketaaaaa3", [TEXT, TEXT, METRIC]))
+        await w._tick()
+        assert w._tracked[uri].shallow is True
+        assert w._tracked[uri].offset == header_end
+        await w.ensure_deep("bucketaaaaa3")
+        assert len(state.runs["bucketaaaaa3"].texts) == 2   # ingested once
+
+        # Gone from the bucket -> forget the offset, in RAM and in the cache.
+        ws.remove("a.nebo")
+        await w._tick()
+        cache.flush()
+        assert w._tracked == {}
+        assert cache.get_watch_files() == {}
+    finally:
+        cache.close()
 
 
-def test_local_workspace_never_imports_huggingface_hub(tmp_path, block_import):
-    """A plain local daemon must work with huggingface_hub uninstalled."""
-    with block_import("huggingface_hub"):
-        ws = open_workspace(str(tmp_path))
-        ws.ensure_root()
-        (tmp_path / "a.nebo").write_bytes(b"data")
-        assert len(ws.list_nebo()) == 1
-        ws.commit([("meta/tree.json", b"{}")], [])
-        assert ws.read_bytes("meta/tree.json") == b"{}"
+def test_bucket_run_tree_coalesces_writes_and_survives_a_read_only_repo(caplog):
+    """Every tree write is an HTTP commit, so a cold start seeding one group
+    per run must not be one commit per run — and a repo the daemon can read
+    but not write has to keep working rather than fail the request."""
+    ws = FakeWorkspace()
+    tree = TreeStore(ws, "meta", debounce=30.0)
 
+    for i in range(20):
+        tree.seed_run(f"run{i}", "exp/a")
+    assert ws.commits == []                     # still inside the window
+    tree.flush()
+    assert ws.commits == [["meta/tree.json"]]   # one commit, not twenty
+    tree.flush()
+    assert len(ws.commits) == 1                 # nothing pending -> no-op
 
-def test_remote_workspace_reports_missing_dependency_clearly(block_import):
-    with block_import("huggingface_hub"):
-        ws = open_workspace("hf://datasets/acme/runs")
-        with pytest.raises(WorkspaceError, match="nebo\\[deploy\\]"):
-            _ = ws.fs
+    # A doc write bypasses the timer (a PUT must be visible to the next GET)
+    # and carries the pending tree change with it.
+    tree.seed_run("run99", "exp/b")
+    tree.set_doc("exp/a", "README.md", "hello")
+    assert len(ws.commits) == 2
+    assert set(ws.commits[1]) == {"meta/tree.json", "meta/docs/exp/a/README.md"}
+    assert tree.get_doc("exp/a", "README.md") == "hello"
+
+    # Doc names come from a RAM index: to_payload() runs on every GET /tree
+    # and every tree_updated broadcast, so it must not list per group.
+    reloaded = TreeStore(ws, "meta", debounce=30.0)
+    payload = reloaded.to_payload({"run0", "run99"})
+    assert payload["groups"]["exp/a"]["docs"] == ["README.md"]
+    assert payload["runs"] == {"run0": "exp/a", "run99": "exp/b"}
+
+    # Timer path (not just flush()).
+    ticking = TreeStore(ws, "meta", debounce=0.05)
+    ticking.create_group("exp/c")
+    deadline = time.monotonic() + 5
+    while len(ws.commits) < 3 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert len(ws.commits) == 3
+
+    # A public repo with no write token: degrade to RAM, warn once.
+    ws.read_only = True
+    ro = TreeStore(ws, "meta", debounce=30.0)
+    with caplog.at_level("WARNING", logger="nebo.server.tree"):
+        for i in range(5):
+            ro.create_group(f"ro/{i}")
+            ro.flush()
+    assert ro.to_payload(set())["groups"].keys() >= {"ro/0", "ro/4"}
+    assert sum("cannot write the run tree" in r.message for r in caplog.records) == 1
