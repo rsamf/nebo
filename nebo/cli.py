@@ -219,6 +219,13 @@ def cmd_serve(args: argparse.Namespace) -> None:
     if getattr(args, "cache_retention_days", None):
         os.environ["NEBO_CACHE_RETENTION_DAYS"] = str(args.cache_retention_days)
 
+    # Say what the daemon is serving and, for an archive, that it only reads
+    # it — otherwise the first refused `nebo groups add` is a surprise.
+    workspace_line = (
+        f"  workspace: {logdir_key}"
+        + (" (read-only archive)" if logdir_remote else "")
+    )
+
     if args.daemon:
         # Background mode
         cmd = [
@@ -246,15 +253,18 @@ def cmd_serve(args: argparse.Namespace) -> None:
         for _ in range(50):
             if _is_alive(port):
                 print(f"Nebo daemon started on {host}:{port} (PID {proc.pid})")
+                print(workspace_line)
                 return
             time.sleep(0.1)
 
         print(f"Nebo daemon started (PID {proc.pid}), but health check pending...")
+        print(workspace_line)
     else:
         # Foreground mode
         _write_pid(os.getpid())
         os.environ["NEBO_DAEMON_PORT"] = str(port)
         print(f"Starting Nebo daemon on {host}:{port}...")
+        print(workspace_line)
         print("Press Ctrl+C to stop.\n")
         import uvicorn
         try:
@@ -1585,15 +1595,16 @@ def main() -> None:
     p_deploy.add_argument("--private", action="store_true", help="Create the Space as private")
     p_deploy.add_argument(
         "--logdir",
-        help="Serve runs from a Hugging Face repo, e.g. "
-             "hf://datasets/acme/runs, instead of the Space's ephemeral /data "
-             "volume. Runs then survive rebuilds and scale-to-zero.",
+        help="Serve runs from a Hugging Face archive, e.g. "
+             "hf://buckets/acme/runs, instead of the Space's ephemeral /data "
+             "volume. Runs then survive rebuilds and scale-to-zero. The Space "
+             "only reads the archive; publish to it separately.",
     )
     p_deploy.add_argument(
         "--hf-token-secret",
-        help="Set HF_TOKEN as a Space secret so the daemon can write its run "
-             "tree back to an hf:// --logdir. Omit for read-only access "
-             "(reading a public repo needs no token).",
+        help="Set HF_TOKEN as a Space secret so the daemon can read a "
+             "*private* hf:// --logdir. Omit for a public one, which needs no "
+             "token (the daemon never writes, so read access is all it uses).",
     )
     p_deploy.add_argument("--from-source", action="store_true", help="Build a wheel from this checkout and ship it instead of installing from PyPI")
     p_deploy.add_argument("--read", choices=["public", "private"], default="public", help="Read access mode (default: public — anyone can view).")

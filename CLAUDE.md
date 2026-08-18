@@ -68,12 +68,26 @@ flag is also given, since the daemon would then ingest nothing.
 `nebo/server/workspace.py` is the **only** module that decides what a
 logdir string means. Two backends: `LocalWorkspace` (a directory —
 byte-identical to pre-workspace nebo) and `HFWorkspace`
-(`hf://[datasets|spaces|models/]<owner>/<name>[@rev][/prefix]`, built
-directly on `huggingface_hub` — `HfFileSystem` for ranged reads, `HfApi`
-for commits, lazily imported so a local daemon never touches the optional
-dep). A bucket workspace decouples runs from the machine serving them: an
+(`hf://[buckets|datasets|spaces|models/]<owner>/<name>[@rev][/prefix]`,
+built directly on `huggingface_hub` — `HfFileSystem` for ranged reads,
+lazily imported so a local daemon never touches the optional dep).
+**Prefer `hf://buckets/...`**: Storage Buckets are S3-like unversioned
+object storage, which is what the Hub recommends for logs and artifacts;
+a dataset repo also works and adds git history, at the cost of that
+history growing on every republish. Buckets are unversioned, so a bucket
+URI carries no `@rev` (rejected at parse). `HfFileSystem` resolves
+buckets and repos alike, so both share one read path.
+
+An archive workspace decouples runs from the machine serving them: an
 ephemeral host (a Space that scales to zero, a container, CI) can be
 destroyed and recreated and still serve the same runs.
+
+**A remote workspace is READ-ONLY** (`Workspace.writable`). A `.nebo`
+file is an append-only event stream and object storage cannot append, so
+the daemon never writes to an archive — `HFWorkspace.commit()`/`move()`
+raise `WorkspaceReadOnly`. Publishing is a separate offline step: assemble
+a workspace locally and sync it up (`huggingface_hub.sync_bucket`). Don't
+reintroduce a daemon-side write path.
 
 Two rules the whole feature rests on:
 
@@ -91,7 +105,8 @@ Two rules the whole feature rests on:
 Remote specifics: all watcher I/O goes through `Workspace.run_io` (inline
 locally, `asyncio.to_thread` remotely — blocking HTTP on the event loop
 would stall the daemon); a poll first checks a cheap commit marker
-(`change_token`) and skips listing while unchanged; reads fetch
+(`change_token` — a repo's head sha; `None` for buckets, which have no
+such marker, so the watcher always lists); reads fetch
 `[offset, EOF]` in **one** ranged GET wrapped in `_OffsetStream` (which
 rebases tell/seek to absolute) because `read_entries_incremental` reads
 1+4+N bytes *per entry*; a tail over `REMOTE_INLINE_MAX` streams through
@@ -270,17 +285,25 @@ async endpoints and the sync ingest seed). Group docs are real markdown files
 under `meta/docs/<group-path>/`.
 
 Storage goes through the `Workspace` seam, so the tree follows the workspace
-root. Locally that is the same atomic tmp + fsync + `os.replace`. On a bucket
-three things differ, all because a write is an HTTP commit rather than a rename:
-tree writes are **debounced** (`REMOTE_SAVE_DEBOUNCE_S`, capped by
-`REMOTE_SAVE_MAX_DELAY_S`) so a cold start seeding one group per run makes one
-commit, with `TreeStore.flush()` draining it from the lifespan teardown; doc
-mutations bypass the timer (a `PUT` must be visible to the next `GET`) and carry
-any pending tree change in the same commit; and doc **names** are indexed in RAM
-because `to_payload()` lists every group's docs on every `GET /tree` and every
-`tree_updated` broadcast (doc contents stay lazy). A bucket the daemon can read
-but not write is supported: the write failure logs once and the tree keeps
-working in memory.
+root. Locally it stays fully writable (atomic tmp + fsync + `os.replace`;
+`move_group` is a directory rename via `Workspace.move`). **On a remote
+workspace the tree is read-only** — the six user-facing mutations
+(`create_group`, `move_group`, `delete_group`, `set_run_group`, `set_doc`,
+`delete_doc`) raise `TreeReadOnly`, which the daemon maps to 409.
+
+`seed_run` is the exception and stays allowed: it restates what the `.nebo`
+header already says, so it updates the in-memory map and skips the write. That
+costs nothing — the group lives in the header (`fileformat.py`), the watcher
+re-reads it on every scan, and `tree.json` is a *derived index* whose only job
+beyond the header is recording placements that **differ** from it. Setting
+`NEBO_GROUP` at log time is therefore enough to organize an archive, with no
+`meta/` published at all. A publisher that curates locally can still sync its
+`meta/` up: `_load` reads it and `seed_run` then returns False, so archived
+curation wins over the header (seed-once, unchanged).
+
+Doc **names** are indexed in RAM for remote workspaces because `to_payload()`
+lists every group's docs on every `GET /tree` and every `tree_updated`
+broadcast (doc contents stay lazy).
 
 - **Single placement store, seed-once.** `tree.json`'s `runs` map (run_id →
   group) is the *only* placement store — no birth-placement fallback, no
@@ -538,7 +561,7 @@ Smoothed values are rendered, not persisted: raw entries in the store remain unt
 - `nebo/core/` — decorators, DAG builder, session state, `DaemonClient`, config, tracker, `.nebo` file format, `groups.py` (`validate_group_path` — shared SDK/daemon group-path validation), `refs.py` (`parse_ref`/`format_ref` for canonical `nebo://` references; TS twin at `ui/src/lib/refs.ts` — keep in lockstep).
 - `nebo/logging/` — user-facing `log`/`log_line`/`log_bar`/`log_pie`/`log_scatter`/`log_histogram`/`log_image`/`log_audio`/`md`, plus the serializer/queue that batches events to the daemon, and `png.py` (pure-stdlib numpy+zlib PNG encoder — see the Pillow convention below).
 - `nebo/labels.py` — public dataclasses (`Points`, `Boxes`, `Circles`, `Polygons`, `Bitmasks`) for `nb.log_image` overlays. Re-exported as `nb.labels`.
-- `nebo/server/` — `daemon.py` (FastAPI app, created via `create_daemon_app` factory), `workspace.py` (`--logdir` backends: `LocalWorkspace` / `HFWorkspace`, `normalize_workspace`, `parse_hf_uri`, `read_frame_bytes` — the sole owner of what a logdir string means), `cache.py` (`RunCache` write-behind SQLite cache, `MediaLRU`, `media_id_for`, cache-path/sweep helpers), `watcher.py` (workspace watcher with persisted offsets + shallow header-only registration), `tree.py` (`TreeStore` — run-tree groups/placements/docs over `meta/tree.json`), `runner.py` (vestigial subprocess manager), `protocol.py` (`MessageType` enum + `decode_batch`).
+- `nebo/server/` — `daemon.py` (FastAPI app, created via `create_daemon_app` factory), `workspace.py` (`--logdir` backends: writable `LocalWorkspace` / read-only `HFWorkspace`, `normalize_workspace`, `parse_hf_uri`, `read_frame_bytes` — the sole owner of what a logdir string means), `cache.py` (`RunCache` write-behind SQLite cache, `MediaLRU`, `media_id_for`, cache-path/sweep helpers), `watcher.py` (workspace watcher with persisted offsets + shallow header-only registration), `tree.py` (`TreeStore` — run-tree groups/placements/docs over `meta/tree.json`), `runner.py` (vestigial subprocess manager), `protocol.py` (`MessageType` enum + `decode_batch`).
 - `nebo/mcp/` — MCP tools (`tools.py`) and stdio/server entry points. Split into observation (graph, text, metrics, description, run summary/history — `nebo_get_text`; media reads via `nebo_list_images` + `nebo_get_image`, which returns a real MCP image content block that the stdio bridge passes through verbatim — the `_mcp_content` escape hatch in `stdio.py` — so images render inline in MCP clients; audio has no MCP read, only `nebo audio get`), alerts (`wait_for_alert`, `list_alerts`, `set_alert`, `delete_alert`), utility (`load_file`), and write (`log_metric/text/image/audio` — `nebo_log_text` entries are `{run_id?, loggable_id?, name?, message, step?}`). Run lifecycle is NOT exposed — pipelines start/stop via the user's shell.
 - `nebo/client.py` — single HTTP client shared by `nebo/mcp/tools.py` and `nebo/cli.py`. Owns all daemon-bound `urllib` traffic; resolves `--url`/`--port`/`--api-token` from kwargs → `NEBO_CLI_URL`/`NEBO_CLI_PORT`/`NEBO_API_TOKEN` → defaults.
 - `nebo/core/transport.py` — `Transport` Protocol shared by the two SDK transports. `FileTransport` (this module) writes append-only `.nebo` files in file mode; `NetworkTransport` (in `nebo/core/client.py`) POSTs events to a daemon in network mode.

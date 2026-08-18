@@ -1814,13 +1814,6 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
                 watcher.stop()
             if watcher_task is not None:
                 await watcher_task
-            if state.tree is not None:
-                # A bucket-backed tree coalesces writes behind a timer; drain
-                # it before the process goes away.
-                try:
-                    await asyncio.to_thread(state.tree.flush)
-                except Exception:
-                    logger.warning("nebo: failed to flush the run tree", exc_info=True)
             if state.cache is not None:
                 state.cache.close()
 
@@ -2285,7 +2278,7 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
     # NOTE on route order: the doc routes (`/groups/{path:path}/docs/{name}`)
     # MUST be declared before the group catch-alls (`/groups/{path:path}`),
     # because `{path:path}` is greedy and would otherwise swallow a doc path.
-    from nebo.server.tree import TreeConflict, TreeWriteError
+    from nebo.server.tree import TreeConflict, TreeReadOnly
 
     _NO_TREE = JSONResponse(
         status_code=503,
@@ -2381,6 +2374,8 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
             return _NO_TREE
         try:
             created = await _tree_io(state.tree.create_group, body.get("path", ""))
+        except TreeReadOnly as e:
+            return JSONResponse(status_code=409, content={"error": str(e)})
         except ValueError as e:
             return JSONResponse(status_code=422, content={"error": str(e)})
         state._enqueue_tree_update()
@@ -2415,8 +2410,8 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
             created = await _tree_io(state.tree.set_doc, path, name, body.decode("utf-8"))
         except ValueError as e:
             return JSONResponse(status_code=422, content={"error": str(e)})
-        except TreeWriteError as e:
-            return JSONResponse(status_code=503, content={"error": str(e)})
+        except TreeReadOnly as e:
+            return JSONResponse(status_code=409, content={"error": str(e)})
         state._enqueue_tree_update()
         return JSONResponse(status_code=201 if created else 200, content={"ok": True})
 
@@ -2428,8 +2423,8 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
             deleted = await _tree_io(state.tree.delete_doc, path, name)
         except ValueError as e:
             return JSONResponse(status_code=422, content={"error": str(e)})
-        except TreeWriteError as e:
-            return JSONResponse(status_code=503, content={"error": str(e)})
+        except TreeReadOnly as e:
+            return JSONResponse(status_code=409, content={"error": str(e)})
         if not deleted:
             return JSONResponse(
                 status_code=404, content={"error": f"doc '{name}' not found"}
@@ -2443,6 +2438,8 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
             return _NO_TREE
         try:
             await _tree_io(state.tree.move_group, path, body.get("new_path", ""))
+        except TreeReadOnly as e:
+            return JSONResponse(status_code=409, content={"error": str(e)})
         except TreeConflict as e:
             return JSONResponse(status_code=409, content={"error": str(e)})
         except ValueError as e:
@@ -2456,6 +2453,8 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
             return _NO_TREE
         try:
             await _tree_io(state.tree.delete_group, path, set(state.known_run_ids()))
+        except TreeReadOnly as e:
+            return JSONResponse(status_code=409, content={"error": str(e)})
         except TreeConflict as e:
             return JSONResponse(status_code=409, content={"error": str(e)})
         except ValueError as e:
@@ -2469,6 +2468,8 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
             return _NO_TREE
         try:
             gp = await _tree_io(state.tree.set_run_group, run_id, body.get("group", ""))
+        except TreeReadOnly as e:
+            return JSONResponse(status_code=409, content={"error": str(e)})
         except ValueError as e:
             return JSONResponse(status_code=422, content={"error": str(e)})
         state._enqueue_tree_update()

@@ -3,19 +3,28 @@
 ``--logdir`` is the workspace root in every daemon mode: it anchors the
 SQLite cache identity, the ``meta/`` run tree, and the directory the watcher
 tails for ``.nebo`` files. Historically it was always a POSIX directory. It
-can now also be a **Hugging Face repo**::
+can now also be a **Hugging Face archive**::
 
-    nebo serve --logdir ./.nebo                              # local (default)
-    nebo serve --logdir hf://datasets/acme/runs              # HF dataset repo
-    nebo serve --logdir hf://datasets/acme/runs/docs         # ...a subdirectory
-    nebo serve --logdir hf://datasets/acme/runs@main/docs    # ...pinned revision
+    nebo serve --logdir ./.nebo                            # local (default)
+    nebo serve --logdir hf://buckets/acme/runs             # Storage Bucket
+    nebo serve --logdir hf://buckets/acme/runs/docs        # ...a subdirectory
+    nebo serve --logdir hf://datasets/acme/runs            # repo (versioned)
+    nebo serve --logdir hf://datasets/acme/runs@main       # ...pinned revision
 
-A bucket workspace makes run data durable independently of the machine
-serving it — the point being that a daemon on ephemeral infrastructure (a
-Hugging Face Space that scales to zero, a CI runner, a container) can be
-destroyed and recreated and still serve the same runs. ``.nebo`` files remain
-the sole source of truth; the SQLite cache stays local and disposable and
-rebuilds from the bucket on every cold start.
+Prefer a **Storage Bucket**: S3-like, unversioned object storage, which is
+what HF recommends for logs and artifacts. A dataset repo also works and adds
+git history, at the cost of that history growing on every republish.
+
+Either way the archive makes run data durable independently of the machine
+serving it — a daemon on ephemeral infrastructure (a Hugging Face Space that
+scales to zero, a CI runner, a container) can be destroyed and recreated and
+still serve the same runs. ``.nebo`` files remain the sole source of truth;
+the SQLite cache stays local and disposable and rebuilds on every cold start.
+
+**A remote workspace is read-only.** A ``.nebo`` file is an append-only event
+stream and object storage cannot append, so the daemon never writes to an
+archive: something else publishes into it (assemble a workspace locally, sync
+it up) and the daemon reads. ``LocalWorkspace`` remains fully writable.
 
 This module is the *only* place that decides what a logdir string means.
 Two rules matter:
@@ -41,9 +50,11 @@ run tree has always used.
 
 ``HFWorkspace`` is built directly on ``huggingface_hub`` (lazily imported —
 it is the optional ``nebo[deploy]`` extra, and a local daemon must never
-import it). Reads go through ``HfFileSystem``, which serves ranged GETs;
-writes go through ``HfApi.create_commit`` so a batch of changes lands as one
-commit. Credentials resolve explicit token -> ``HF_TOKEN`` -> cached login.
+import it), and is **read-only**. Reads go through ``HfFileSystem``, which
+serves ranged GETs and resolves buckets and repos alike, so both archive
+kinds share one read path. ``commit()`` raises ``WorkspaceReadOnly``.
+Credentials resolve explicit token -> ``HF_TOKEN`` -> cached login; read
+access is all the daemon ever needs.
 """
 
 from __future__ import annotations
@@ -75,8 +86,23 @@ REMOTE_BLOCK_SIZE = 8 * 1024 * 1024
 
 # hf:// path segment -> huggingface_hub repo_type. A bare `hf://owner/name`
 # is a model repo, matching HfFileSystem's own convention.
-_HF_TYPE_SEGMENTS = {"datasets": "dataset", "spaces": "space", "models": "model"}
-_HF_TYPE_TO_SEGMENT = {"dataset": "datasets", "space": "spaces", "model": ""}
+#
+# `buckets` is the odd one out and the one to reach for: Storage Buckets are
+# S3-like object storage rather than a git repo, which is what nebo actually
+# wants for an archive of append-only run files. They are also unversioned, so
+# a bucket URI carries no @revision.
+_HF_TYPE_SEGMENTS = {
+    "buckets": "bucket",
+    "datasets": "dataset",
+    "spaces": "space",
+    "models": "model",
+}
+_HF_TYPE_TO_SEGMENT = {
+    "bucket": "buckets",
+    "dataset": "datasets",
+    "space": "spaces",
+    "model": "",
+}
 
 _HF_IMPORT_ERROR = (
     "huggingface_hub is required for hf:// workspaces. Install with:\n"
@@ -88,6 +114,15 @@ _HF_IMPORT_ERROR = (
 
 class WorkspaceError(RuntimeError):
     """A workspace URI is malformed, or its backend is unusable."""
+
+
+class WorkspaceReadOnly(WorkspaceError):
+    """A write was attempted against a workspace the daemon only reads.
+
+    A `.nebo` file is an append-only event stream and object storage cannot
+    append, so a bucket (or repo) workspace is an *archive*: something else
+    publishes into it, and the daemon reads. Raising rather than silently
+    no-oping keeps a stray write path visible."""
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +139,7 @@ def is_remote_uri(value: object) -> bool:
 class HfRef:
     """A parsed ``hf://`` location: repo, optional revision, optional subpath."""
 
-    repo_type: str          # "dataset" | "space" | "model"
+    repo_type: str          # "bucket" | "dataset" | "space" | "model"
     repo_id: str            # "owner/name"
     prefix: str             # "" or "sub/dir" (no leading or trailing slash)
     revision: Optional[str]
@@ -138,11 +173,11 @@ class HfRef:
 
 
 def parse_hf_uri(uri: str) -> HfRef:
-    """Parse ``hf://[datasets|spaces|models/]<owner>/<name>[@rev][/<prefix>]``.
+    """Parse ``hf://[buckets|datasets|spaces|models/]<owner>/<name>[@rev][/<prefix>]``.
 
-    Raises :class:`WorkspaceError` on anything that isn't a complete repo
-    reference — a half-specified bucket would otherwise fail much later, deep
-    inside an HTTP call.
+    Raises :class:`WorkspaceError` on anything that isn't a complete reference
+    — a half-specified location would otherwise fail much later, deep inside
+    an HTTP call.
     """
     if not is_remote_uri(uri):
         raise WorkspaceError(f"not an hf:// URI: {uri!r}")
@@ -170,6 +205,14 @@ def parse_hf_uri(uri: str) -> HfRef:
         name, revision = name.split("@", 1)
         if not name or not revision:
             raise WorkspaceError(f"malformed revision in hf:// URI: {uri!r}")
+        if repo_type == "bucket":
+            # Buckets are unversioned; HfFileSystem forces revision=None for
+            # them, so an @rev here would silently address something else.
+            raise WorkspaceError(
+                f"buckets have no revisions: {uri!r}\n"
+                "  Storage Buckets are unversioned object storage. Drop the "
+                "'@' suffix, or use hf://datasets/... for a versioned repo."
+            )
 
     prefix = "/".join(p for p in prefix_parts if p)
     return HfRef(repo_type, f"{owner}/{name}", prefix, revision)
@@ -217,6 +260,10 @@ class Workspace(Protocol):
 
     uri: str
     is_remote: bool
+    # Whether the daemon may write here. False for every archive backend: a
+    # .nebo file is an append-only stream and object storage cannot append, so
+    # something else publishes into the archive and the daemon reads it.
+    writable: bool
     default_poll_interval: float
 
     def ensure_root(self) -> None: ...
@@ -239,10 +286,19 @@ class Workspace(Protocol):
         *,
         message: str = "nebo: update",
     ) -> None:
-        """Apply adds and deletes atomically where the backend allows it.
+        """Apply adds and deletes. Only valid when ``writable``.
 
         Deletes are applied first, so a move is one call. A delete path
         ending in ``/`` names a directory and removes it recursively.
+        Read-only backends raise :class:`WorkspaceReadOnly`.
+        """
+        ...
+
+    def move(self, src: str, dst: str) -> None:
+        """Relocate a subtree. No-op if ``src`` does not exist.
+
+        Only valid when ``writable``; read-only backends raise
+        :class:`WorkspaceReadOnly`.
         """
         ...
 
@@ -296,6 +352,7 @@ class LocalWorkspace:
     """A plain directory. Behavior is identical to pre-workspace nebo."""
 
     is_remote = False
+    writable = True
 
     def __init__(self, root: Path | str, poll_interval: Optional[float] = None) -> None:
         self._root = Path(str(root)).resolve()
@@ -407,6 +464,16 @@ class LocalWorkspace:
         for rel, data in adds:
             self._write_atomic(self._abs(rel), data)
 
+    def move(self, src: str, dst: str) -> None:
+        source = self._abs(src)
+        if not source.exists():
+            return
+        target = self._abs(dst)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            shutil.rmtree(target) if target.is_dir() else target.unlink()
+        shutil.move(str(source), str(target))
+
     @staticmethod
     def _write_atomic(path: Path, data: bytes) -> None:
         """tmp + fsync + rename — the run tree has always written this way."""
@@ -430,9 +497,14 @@ class LocalWorkspace:
 
 
 class HFWorkspace:
-    """A Hugging Face repo (usually a dataset) addressed as ``hf://…``."""
+    """A Hugging Face Storage Bucket or repo, addressed as ``hf://…``.
+
+    **Read-only.** The daemon serves runs out of the archive and never writes
+    to it; publishing is a separate, offline step (see the module docstring).
+    """
 
     is_remote = True
+    writable = False
 
     def __init__(
         self,
@@ -532,11 +604,19 @@ class HFWorkspace:
         )
 
     def change_token(self) -> Optional[str]:
-        """The repo's head commit sha.
+        """A cheap marker that changes when the archive does, or None.
 
-        One cheap call per poll; the watcher skips the (much more expensive)
-        listing entirely while it is unchanged.
+        Repos have a head commit sha, so one small call per poll lets the
+        watcher skip the much more expensive listing while it is unchanged.
+
+        Buckets have no such marker. `bucket_info` exposes size/total_files,
+        but that pair misses a same-size replacement — exactly what a
+        republished archive looks like — so returning None is the honest
+        answer. The watcher treats None as "always list", and a bucket
+        listing is one cheap call at a 30 s cadence.
         """
+        if self._ref.repo_type == "bucket":
+            return None
         try:
             info = self.api.repo_info(
                 repo_id=self._ref.repo_id,
@@ -634,44 +714,24 @@ class HFWorkspace:
         *,
         message: str = "nebo: update",
     ) -> None:
-        """Apply adds and deletes as a single HF commit.
+        """Always raises — the daemon does not write to an archive.
 
-        A delete path ending in ``/`` is a folder, matching
-        ``CommitOperationDelete(is_folder="auto")`` — the same convention
-        ``LocalWorkspace`` reads as an rmtree.
+        Publishing is a separate, offline step: assemble a workspace locally
+        and sync it up (``huggingface_hub.sync_bucket`` for a bucket, a commit
+        for a repo). Writing from the daemon would mean an object PUT per
+        mutation against storage that cannot append, so the run tree degrades
+        to read-only here instead — see `TreeStore`.
         """
-        hub = self._hub()
-        ops: list[Any] = []
-        for rel in deletes:
-            is_folder = rel.endswith("/")
-            path = self._repo_path(rel.rstrip("/"))
-            ops.append(
-                hub.CommitOperationDelete(
-                    path_in_repo=f"{path}/" if is_folder else path,
-                    is_folder=is_folder,
-                )
-            )
-        for rel, data in adds:
-            ops.append(
-                hub.CommitOperationAdd(
-                    path_in_repo=self._repo_path(rel),
-                    path_or_fileobj=data,
-                )
-            )
-        if not ops:
-            return
-        self.api.create_commit(
-            repo_id=self._ref.repo_id,
-            repo_type=self._ref.repo_type,
-            revision=self._ref.revision,
-            operations=ops,
-            commit_message=message,
+        raise WorkspaceReadOnly(
+            f"{self.uri} is an archive; nebo only reads from it. Publish by "
+            "syncing a local directory up (e.g. huggingface_hub.sync_bucket)."
         )
-        # The listing cache would otherwise keep serving the pre-commit tree.
-        try:
-            self.fs.invalidate_cache(self._fs_path())
-        except Exception:
-            pass
+
+    def move(self, src: str, dst: str) -> None:
+        """Always raises — see :meth:`commit`."""
+        raise WorkspaceReadOnly(
+            f"{self.uri} is an archive; nebo only reads from it."
+        )
 
     async def run_io(self, fn: Callable[..., Any], *args: Any) -> Any:
         # Every remote call is blocking HTTP. Running it on the event loop

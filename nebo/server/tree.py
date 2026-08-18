@@ -8,29 +8,30 @@ authoritative and every move is explicit.
 
 The daemon holds the tree in RAM and rewrites the whole (tiny) JSON on each
 mutation — human/agent-frequency, so a synchronous write is fine. A
-``threading.Lock`` guards it because mutations come from both the async HTTP
+``threading.RLock`` guards it because mutations come from both the async HTTP
 endpoints and the synchronous ingest seed hook. Group docs are real markdown
 files under ``meta/docs/<group-path>/``.
 
-Storage goes through a `Workspace` (see `nebo/server/workspace.py`), so the
-tree lives wherever the workspace root does. Locally that is the same
-tmp+fsync+rename write it has always been. On a bucket workspace two things
-change, both because a write is an HTTP commit rather than a rename:
+Storage goes through a `Workspace` (see `nebo/server/workspace.py`), and the
+tree is **read-only whenever that workspace is** — which is every remote
+archive. Two things follow:
 
-* **Writes are debounced.** A cold start seeds one group per run; without
-  coalescing that would be one commit per run. Mutations mark the tree dirty
-  and arm a short timer, and `flush()` (called on daemon shutdown) drains it.
-  Doc mutations bypass the timer — a `PUT` must be readable by the next `GET`
-  — and carry any pending tree change along in the same commit.
-* **Doc *names* are indexed in RAM.** `to_payload()` lists every group's docs,
-  and it runs on every ``GET /tree`` and every ``tree_updated`` broadcast. One
-  listing per group per read is free locally and untenable over HTTP, so the
-  remote backend indexes names once at load and maintains them in place. Doc
-  *contents* stay lazy.
+* **Nothing is lost.** A run's group lives in its ``.nebo`` header, part of the
+  immutable artifact, and the watcher re-reads it on every scan. ``tree.json``
+  is a *derived index* whose only job beyond the header is recording placements
+  that **differ** from it, so `seed_run` keeps populating the map in memory and
+  the tree rebuilds identically on every cold start. Setting ``NEBO_GROUP`` at
+  log time is therefore enough to organize an archive.
+* **Curation still travels.** A publisher that assembles a workspace locally
+  can sync its ``meta/`` up with the runs; `_load` reads it, `seed_run` then
+  returns False for those runs, and the archived placement wins over the header
+  exactly as a local move does. Only the six user-facing mutations are refused,
+  because those are the things a header cannot express.
 
-A bucket workspace the daemon can read but not write (a public dataset, no HF
-token) is a supported configuration: write failures log once and the tree
-keeps working in RAM. Placements re-seed from run headers on the next start.
+Doc **names** are indexed in RAM for remote workspaces: `to_payload()` lists
+every group's docs and runs on every ``GET /tree`` and every ``tree_updated``
+broadcast, which is free locally and untenable over HTTP. Doc *contents* stay
+lazy.
 """
 
 from __future__ import annotations
@@ -48,23 +49,17 @@ logger = logging.getLogger(__name__)
 
 TREE_VERSION = 1
 
-# How long a remote write waits for more mutations before committing, and the
-# longest a steady stream of them can defer one.
-REMOTE_SAVE_DEBOUNCE_S = 2.0
-REMOTE_SAVE_MAX_DELAY_S = 15.0
-
 
 class TreeConflict(Exception):
     """A mutation refused because it would violate structure (HTTP 409),
     e.g. deleting a non-empty group."""
 
 
-class TreeWriteError(Exception):
-    """A doc mutation the workspace refused (HTTP 503).
+class TreeReadOnly(Exception):
+    """A mutation refused because the workspace is an archive (HTTP 409).
 
-    Placement changes degrade quietly on a read-only bucket — they re-seed
-    from `.nebo` headers — but a doc write has no such fallback, so reporting
-    success would leave the caller with a doc that reads back as missing."""
+    Not a failure — a constraint. The daemon never writes to a bucket or repo;
+    curation is assembled locally and published with the runs."""
 
 
 class TreeStore:
@@ -74,7 +69,6 @@ class TreeStore:
         self,
         meta: Workspace | Path | str,
         prefix: str = "meta",
-        debounce: Optional[float] = None,
     ) -> None:
         # Accepts a Workspace (+ the prefix within it) or a bare meta
         # directory, which becomes a local workspace rooted at that directory.
@@ -87,23 +81,15 @@ class TreeStore:
         self._lock = threading.RLock()
         self._groups: dict[str, dict] = {}  # path -> {} (reserved for later)
         self._runs: dict[str, str] = {}     # run_id -> group path ("" = root)
-
-        # Remote-only write coalescing.
-        self._debounce = (
-            REMOTE_SAVE_DEBOUNCE_S if debounce is None else debounce
-        )
-        self._dirty = False
-        # Bumped on every state change so the debounced writer can tell
-        # whether a mutation landed while its commit was in flight.
-        self._version = 0
-        self._timer: Optional[threading.Timer] = None
-        self._deadline: Optional[float] = None
-        self._write_failed = False
         # group path -> doc names. Only maintained for remote workspaces;
         # local reads the directory so externally-added files show up.
         self._doc_index: Optional[dict[str, list[str]]] = None
 
         self._load()
+
+    @property
+    def writable(self) -> bool:
+        return bool(getattr(self._ws, "writable", True))
 
     # -- paths -----------------------------------------------------------
 
@@ -159,120 +145,30 @@ class TreeStore:
         }
         return json.dumps(data, indent=2, sort_keys=True).encode("utf-8")
 
-    def _save(self) -> None:
-        """Persist the tree. Caller holds the lock."""
-        self._version += 1
-        if self._ws.is_remote:
-            self._dirty = True
-            self._arm_timer()
-            return
-        self._apply([], [], tree=True)
+    def _save(self, adds=None, deletes=None) -> None:
+        """Persist tree.json (plus any doc changes) — caller holds the lock.
 
-    def _apply(
-        self,
-        adds: list[tuple[str, bytes]],
-        deletes: list[str],
-        *,
-        tree: bool,
-        message: str = "nebo: update run tree",
-    ) -> bool:
-        """Write through to the workspace now. Caller holds the lock.
-
-        Returns whether the write landed — callers that report a mutation to
-        the user (doc created / deleted) must not claim success on a bucket
-        the daemon cannot write.
+        A no-op on a read-only workspace, which is not a loss: every placement
+        `seed_run` records there is re-derivable from the ``.nebo`` headers on
+        the next scan. Mutations that are *not* re-derivable refuse up front
+        via `_require_writable`, so they never reach here.
         """
-        self._version += 1
-        if tree or self._dirty:
-            adds = [(self._tree_rel, self._payload_bytes()), *adds]
-        if not adds and not deletes:
-            return True
-        try:
-            self._ws.commit(adds, deletes, message=message)
-        except Exception as e:  # noqa: BLE001
-            if not self._ws.is_remote:
-                raise
-            self._warn_unwritable(e)
-            return False
-        # Cleared on success so the next outage warns again, rather than the
-        # first transient blip silencing every later one for the process.
-        self._write_failed = False
-        self._dirty = False
-        self._cancel_timer()
-        return True
-
-    def _warn_unwritable(self, exc: Exception) -> None:
-        """A read-only bucket (public dataset, no write token) is a supported
-        deployment: keep serving from RAM and say so once per outage."""
-        if self._write_failed:
+        if not self.writable:
             return
-        self._write_failed = True
-        logger.warning(
-            "nebo: cannot write the run tree to %s (%s). The tree stays in "
-            "memory for this process; run placements re-seed from .nebo "
-            "headers on restart. Set HF_TOKEN with write access to persist it.",
-            self._ws.uri, exc,
+        self._ws.commit(
+            [(self._tree_rel, self._payload_bytes()), *(adds or [])],
+            list(deletes or []),
+            message="nebo: update run tree",
         )
 
-    # -- debounced remote writes ------------------------------------------
-
-    def _arm_timer(self) -> None:
-        """(Re)start the coalescing window. Caller holds the lock."""
-        import time
-
-        now = time.monotonic()
-        if self._deadline is None:
-            self._deadline = now + REMOTE_SAVE_MAX_DELAY_S
-        # A steady stream of mutations must not defer the write forever.
-        delay = max(0.0, min(self._debounce, self._deadline - now))
-        if self._timer is not None:
-            self._timer.cancel()
-        self._timer = threading.Timer(delay, self._on_timer)
-        self._timer.daemon = True
-        self._timer.start()
-
-    def _cancel_timer(self) -> None:
-        if self._timer is not None:
-            self._timer.cancel()
-            self._timer = None
-        self._deadline = None
-
-    def _on_timer(self) -> None:
-        """Commit the debounced tree write **outside** the lock.
-
-        `to_payload()` takes the same lock from the event loop, so holding it
-        across an HTTP commit would block every `GET /tree` for the duration
-        of the request.
-        """
-        with self._lock:
-            self._timer = None
-            self._deadline = None
-            if not self._dirty:
-                return
-            payload = self._payload_bytes()
-            version = self._version
-
-        try:
-            self._ws.commit(
-                [(self._tree_rel, payload)], [], message="nebo: update run tree",
-            )
-        except Exception as e:  # noqa: BLE001
-            self._warn_unwritable(e)
+    def _require_writable(self, what: str) -> None:
+        if self.writable:
             return
-
-        with self._lock:
-            self._write_failed = False
-            # A mutation that landed while we were committing is not covered
-            # by the bytes we just wrote, so leave it pending.
-            if self._version == version:
-                self._dirty = False
-
-    def flush(self) -> None:
-        """Commit any pending tree write. Called on daemon shutdown."""
-        with self._lock:
-            self._cancel_timer()
-            if self._dirty:
-                self._apply([], [], tree=True)
+        raise TreeReadOnly(
+            f"cannot {what}: {self._ws.uri} is an archive that nebo only reads. "
+            "Organize runs with NEBO_GROUP at log time, or curate a local "
+            "workspace and publish its meta/ alongside the runs."
+        )
 
     # -- helpers -------------------------------------------------------
 
@@ -325,37 +221,18 @@ class TreeStore:
                 added = True
         return added
 
-    def _has_docs(self, group: str) -> bool:
-        """Whether ``meta/docs/<group>/`` actually holds anything.
-
-        Deletes are only emitted for folders that exist: the Hub rejects a
-        commit that deletes a missing path ("A file with this name doesn't
-        exist"), which would take the bundled tree.json write down with it.
-        """
-        if self._doc_index is not None:
-            return any(
-                g == group or g.startswith(group + "/")
-                for g in self._doc_index
-            )
-        return bool(self._ws.list_tree(self._docs_rel(group)))
-
-    def _read_docs_subtree(self, group: str) -> list[tuple[str, bytes]]:
-        """Every doc under ``group``, as (name-relative-to-group, content)."""
-        base = self._docs_rel(group)
-        out: list[tuple[str, bytes]] = []
-        for rel in self._ws.list_tree(base):
-            rel = rel.replace("\\", "/")
-            data = self._ws.read_bytes(f"{base}/{rel}")
-            if data is not None:
-                out.append((rel, data))
-        return out
-
     # -- mutations -----------------------------------------------------
 
     def seed_run(self, run_id: str, group: object) -> bool:
         """Seed-once: record a run's birth group **only if it has no placement
         yet**. A moved run therefore stays moved when its file is re-scanned —
-        the header never re-wins. Returns True if the tree changed."""
+        the header never re-wins. Returns True if the tree changed.
+
+        Unlike the mutations below this is *derived* state, not curation: it
+        restates what the ``.nebo`` header already says. So it stays allowed on
+        a read-only archive — it just updates the in-memory map and skips the
+        write, and the same map is rebuilt from headers on the next start.
+        """
         gp = validate_group_path(group)
         with self._lock:
             if run_id in self._runs:
@@ -374,6 +251,7 @@ class TreeStore:
         if not gp:
             raise ValueError("cannot create the root group")
         with self._lock:
+            self._require_writable(f"create group {gp!r}")
             if gp in self._groups:
                 return False
             self._ensure_group_locked(gp)
@@ -391,6 +269,7 @@ class TreeStore:
         if not new_gp:
             raise ValueError("cannot move a group to root")
         with self._lock:
+            self._require_writable(f"move group {old_gp!r}")
             if old_gp not in self._groups:
                 raise ValueError(f"group not found: {old_gp!r}")
             if new_gp == old_gp:
@@ -412,29 +291,10 @@ class TreeStore:
             self._ensure_group_locked(new_gp)
             self._runs = {rid: _remap(gp) for rid, gp in self._runs.items()}
 
-            # Read the subtree, then re-add it under the new prefix and drop
-            # both the source and any pre-existing destination — one commit.
-            docs = self._read_docs_subtree(old_gp)
-            adds = [
-                (f"{self._docs_rel(new_gp)}/{rel}", data) for rel, data in docs
-            ]
-            deletes = [
-                self._docs_rel(gp) + "/"
-                for gp in (old_gp, new_gp) if self._has_docs(gp)
-            ]
-            if self._doc_index is not None:
-                moved = {
-                    _remap(g): names
-                    for g, names in self._doc_index.items()
-                    if g == old_gp or g.startswith(old_gp + "/")
-                }
-                self._index_drop_subtree(old_gp)
-                self._index_drop_subtree(new_gp)
-                self._doc_index.update(moved)
-            self._apply(
-                adds, deletes, tree=True,
-                message=f"nebo: move group {old_gp} -> {new_gp}",
-            )
+            # Writable means local, so this is a directory rename rather than
+            # a read-and-rewrite of every doc.
+            self._ws.move(self._docs_rel(old_gp), self._docs_rel(new_gp))
+            self._save()
 
     def delete_group(self, path: object, known_run_ids: set[str]) -> None:
         """Delete an empty group. Raises TreeConflict if it has subgroups or
@@ -444,6 +304,7 @@ class TreeStore:
         if not gp:
             raise ValueError("cannot delete the root group")
         with self._lock:
+            self._require_writable(f"delete group {gp!r}")
             if gp not in self._groups:
                 raise ValueError(f"group not found: {gp!r}")
             if any(g.startswith(gp + "/") for g in self._groups):
@@ -460,11 +321,7 @@ class TreeStore:
             del self._groups[gp]
             # Drop dangling placements (unknown runs) that pointed here.
             self._runs = {rid: g for rid, g in self._runs.items() if g != gp}
-            deletes = [self._docs_rel(gp) + "/"] if self._has_docs(gp) else []
-            self._index_drop_subtree(gp)
-            self._apply(
-                [], deletes, tree=True, message=f"nebo: delete group {gp}",
-            )
+            self._save(deletes=[self._docs_rel(gp) + "/"])
 
     def set_run_group(self, run_id: str, group: object) -> str:
         """Explicitly place a run (override). ``""`` moves it to root (kept as
@@ -472,6 +329,7 @@ class TreeStore:
         the target group. Returns the normalized group path."""
         gp = validate_group_path(group)
         with self._lock:
+            self._require_writable(f"move run {run_id!r}")
             if gp:
                 self._ensure_group_locked(gp)
             self._runs[run_id] = gp
@@ -490,29 +348,17 @@ class TreeStore:
 
     def set_doc(self, path: object, name: object, content: str) -> bool:
         """Write a doc (auto-creating the group). Returns True if the file was
-        newly created, False if it overwrote an existing one.
-
-        Raises `TreeWriteError` if the workspace refused the write — the index
-        must not advertise a doc that a later GET would 404 on.
-        """
+        newly created, False if it overwrote an existing one."""
         gp = validate_group_path(path)
         doc = validate_doc_name(name)
         with self._lock:
+            self._require_writable(f"write doc {doc!r}")
             if gp:
                 self._ensure_group_locked(gp)
             existed = doc in self._list_docs_locked(gp)
-            # Written immediately, not debounced: a PUT must be visible to the
-            # next GET. Any pending tree change rides along in the same commit.
-            ok = self._apply(
-                [(f"{self._docs_rel(gp)}/{doc}", content.encode("utf-8"))],
-                [],
-                tree=True,
-                message=f"nebo: set doc {gp}/{doc}" if gp else f"nebo: set doc {doc}",
+            self._save(
+                adds=[(f"{self._docs_rel(gp)}/{doc}", content.encode("utf-8"))]
             )
-            if not ok:
-                raise TreeWriteError(
-                    f"{self._ws.uri} is not writable — the doc was not saved"
-                )
             self._index_add(gp, doc)
             return not existed
 
@@ -520,16 +366,10 @@ class TreeStore:
         gp = validate_group_path(path)
         doc = validate_doc_name(name)
         with self._lock:
+            self._require_writable(f"delete doc {doc!r}")
             if doc not in self._list_docs_locked(gp):
                 return False
-            ok = self._apply(
-                [], [f"{self._docs_rel(gp)}/{doc}"], tree=False,
-                message=f"nebo: delete doc {gp}/{doc}" if gp else f"nebo: delete doc {doc}",
-            )
-            if not ok:
-                raise TreeWriteError(
-                    f"{self._ws.uri} is not writable — the doc was not deleted"
-                )
+            self._save(deletes=[f"{self._docs_rel(gp)}/{doc}"])
             self._index_remove(gp, doc)
             return True
 

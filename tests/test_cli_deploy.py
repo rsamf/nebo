@@ -158,17 +158,23 @@ def test_logdir_deploy_points_the_space_at_the_bucket() -> None:
     assert "Connect from Python" in files["README.md"]
 
     # With a bucket: watcher on, no network intake, and the Space page stops
-    # telling visitors to push runs it would reject.
-    files, secrets = run(logdir="hf://datasets/acme/runs")
-    assert cmd(files["Dockerfile"]) == base + ', "--logdir", "hf://datasets/acme/runs"]'
-    assert "does **not** accept runs pushed over the network" in files["README.md"]
-    assert "acme/runs" in files["README.md"]
+    # telling visitors to push runs it would reject. The install line must
+    # carry [deploy] or the daemon cannot import huggingface_hub and the
+    # Space never boots.
+    files, secrets = run(logdir="hf://buckets/acme/runs")
+    assert cmd(files["Dockerfile"]) == base + ', "--logdir", "hf://buckets/acme/runs"]'
+    # The Space page must say the archive is read-only and show how to publish.
+    assert "only reads" in files["README.md"]
+    assert "sync_bucket" in files["README.md"]
+    assert "hf://buckets/acme/runs" in files["README.md"]
+    assert "NEBO_GROUP" in files["README.md"]
     # The deploy credential is usually full-scope — never leak it implicitly.
     assert secrets == {"NEBO_API_TOKEN"}
-    _, secrets = run(logdir="hf://datasets/acme/runs", hf_token_secret="hf_write")
+    assert "nebo[deploy]" in files["Dockerfile"]
+    _, secrets = run(logdir="hf://buckets/acme/runs", hf_token_secret="hf_write")
     assert secrets == {"NEBO_API_TOKEN", "HF_TOKEN"}
 
     # A Space has no durable local disk to point at.
-    for bad in ("/var/lib/nebo", "hf://datasets/acme"):
+    for bad in ("/var/lib/nebo", "hf://buckets/acme", "hf://buckets/a/b@rev"):
         with pytest.raises(SystemExit):
             run(logdir=bad)
