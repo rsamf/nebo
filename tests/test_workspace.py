@@ -10,14 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import io
-import time
+import json
 
 import pytest
 
 from nebo.core.fileformat import NeboFileWriter
 from nebo.server.cache import RunCache, resolve_cache_path
 from nebo.server.daemon import DaemonState
-from nebo.server.tree import TreeStore, TreeWriteError
+from nebo.server.tree import TreeReadOnly, TreeStore
 from nebo.server.watcher import DirectoryWatcher
 from nebo.server.workspace import (
     FileStat,
@@ -49,12 +49,13 @@ def build_nebo(run_id: str, events: list[dict], started_at: float | None = None)
 class FakeWorkspace:
     """An in-memory stand-in that behaves like a bucket.
 
-    Deliberately mimics the awkward parts: no mtimes, a content token
-    instead of size-based change detection, a change marker that gates
+    Deliberately mimics the awkward parts: read-only, no mtimes, a content
+    token instead of size-based change detection, a change marker that gates
     listing, and I/O that must be awaited.
     """
 
     is_remote = True
+    writable = False
     default_poll_interval = 30.0
 
     def __init__(self, uri="hf://datasets/acme/runs", files=None):
@@ -65,7 +66,6 @@ class FakeWorkspace:
         self.deletes: list[str] = []
         self.io_calls = 0
         self.list_calls = 0
-        self.read_only = False
 
     def put(self, name, data):
         self.files[name] = data
@@ -131,8 +131,8 @@ class FakeWorkspace:
         return sorted(n[len(prefix):] for n in self.files if n.startswith(prefix))
 
     def commit(self, adds, deletes, *, message="nebo: update"):
-        if self.read_only:
-            raise PermissionError("403 Forbidden")
+        # Recorded, not refused: the assertion that matters is that nothing
+        # ever calls this, so a silent write would show up as a non-empty list.
         self.commits.append([r for r, _ in adds])
         self.deletes.extend(deletes)
         for rel in deletes:
@@ -298,83 +298,77 @@ async def test_republished_objects_do_not_resume_mid_file(tmp_path):
         cache.close()
 
 
-def test_bucket_run_tree_coalesces_writes_and_survives_a_read_only_repo(caplog):
-    """Every tree write is an HTTP commit, so a cold start seeding one group
-    per run must not be one commit per run — and a repo the daemon can read
-    but not write has to keep working rather than fail the request."""
+def test_bucket_run_tree_is_read_only():
+    """A .nebo file is an append-only stream and object storage cannot append,
+    so the daemon never writes to an archive. What matters is that this costs
+    nothing: placements are re-derivable from the run headers, and archived
+    curation still loads."""
     ws = FakeWorkspace()
-    tree = TreeStore(ws, "meta", debounce=30.0)
+    tree = TreeStore(ws, "meta")
+    assert tree.writable is False
 
+    # seed_run restates what the .nebo header already says, so it stays
+    # allowed — it just updates RAM and writes nothing.
     for i in range(20):
-        tree.seed_run(f"run{i}", "exp/a")
-    assert ws.commits == []                     # still inside the window
-    tree.flush()
-    assert ws.commits == [["meta/tree.json"]]   # one commit, not twenty
-    tree.flush()
-    assert len(ws.commits) == 1                 # nothing pending -> no-op
+        assert tree.seed_run(f"run{i}", "exp/a") is True
+    assert ws.commits == [], "the daemon must not write to an archive"
+    assert tree.to_payload({"run0", "run19"})["runs"] == {
+        "run0": "exp/a", "run19": "exp/a",
+    }
 
-    # A doc write bypasses the timer (a PUT must be visible to the next GET)
-    # and carries the pending tree change with it.
-    tree.seed_run("run99", "exp/b")
-    tree.set_doc("exp/a", "README.md", "hello")
-    assert len(ws.commits) == 2
-    assert set(ws.commits[1]) == {"meta/tree.json", "meta/docs/exp/a/README.md"}
-    assert tree.get_doc("exp/a", "README.md") == "hello"
+    # Everything a header cannot express is refused, with a message that says
+    # what to do instead.
+    for call in (
+        lambda: tree.create_group("exp/b"),
+        lambda: tree.move_group("exp/a", "exp/b"),
+        lambda: tree.delete_group("exp/a", set()),
+        lambda: tree.set_run_group("run0", "exp/b"),
+        lambda: tree.set_doc("exp/a", "README.md", "x"),
+        lambda: tree.delete_doc("exp/a", "README.md"),
+    ):
+        with pytest.raises(TreeReadOnly, match="NEBO_GROUP"):
+            call()
+    assert ws.commits == []
 
-    # Doc names come from a RAM index: to_payload() runs on every GET /tree
-    # and every tree_updated broadcast, so it must not list per group.
-    reloaded = TreeStore(ws, "meta", debounce=30.0)
-    payload = reloaded.to_payload({"run0", "run99"})
-    assert payload["groups"]["exp/a"]["docs"] == ["README.md"]
-    assert payload["runs"] == {"run0": "exp/a", "run99": "exp/b"}
+    # Curation a publisher archived alongside the runs still loads, and still
+    # wins over the header (seed-once), exactly as a local move does.
+    curated = FakeWorkspace(files={
+        "meta/tree.json": json.dumps({
+            "version": 1,
+            "groups": {"curated": {}, "exp/a": {}},
+            "runs": {"run0": "curated"},
+        }).encode(),
+        "meta/docs/curated/README.md": b"# hand-written",
+    })
+    t2 = TreeStore(curated, "meta")
+    assert t2.seed_run("run0", "exp/a") is False      # archived placement wins
+    assert t2.seed_run("run1", "exp/a") is True       # unseen run seeds from header
+    payload = t2.to_payload({"run0", "run1"})
+    assert payload["runs"] == {"run0": "curated", "run1": "exp/a"}
+    # Doc names come from a RAM index: to_payload runs on every GET /tree and
+    # every tree_updated broadcast, so it must not list per group.
+    assert payload["groups"]["curated"]["docs"] == ["README.md"]
+    assert t2.get_doc("curated", "README.md") == "# hand-written"
+    assert curated.commits == []
 
-    # Timer path (not just flush()).
-    ticking = TreeStore(ws, "meta", debounce=0.05)
-    ticking.create_group("exp/c")
-    deadline = time.monotonic() + 5
-    while len(ws.commits) < 3 and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert len(ws.commits) == 3
 
-    # Deletes are only emitted for docs folders that exist: the Hub rejects a
-    # commit deleting a missing path, which would take the bundled tree.json
-    # write down with it.
-    docless = FakeWorkspace()
-    d = TreeStore(docless, "meta", debounce=30.0)
-    d.create_group("exp/a")
-    d.flush()
-    d.move_group("exp/a", "exp/b")
-    d.create_group("exp/c")
-    d.flush()
-    d.delete_group("exp/c", set())
-    assert docless.deletes == [], "no docs -> nothing to delete"
-    d.set_doc("exp/b", "README.md", "hi")
-    d.move_group("exp/b", "exp/d")
-    assert docless.deletes == ["meta/docs/exp/b/"]
-    assert d.get_doc("exp/d", "README.md") == "hi"
+def test_local_run_tree_stays_fully_writable(tmp_path):
+    """The read-only rule is about archives only — a local workspace keeps
+    every mutation, and a group move is still a directory rename."""
+    tree = TreeStore(tmp_path / "meta")
+    assert tree.writable is True
 
-    # A public repo with no write token: degrade to RAM, warn once — but a
-    # doc write has no RAM fallback, so it must report failure rather than
-    # advertise a doc that reads back 404.
-    ws.read_only = True
-    ro = TreeStore(ws, "meta", debounce=30.0)
-    with caplog.at_level("WARNING", logger="nebo.server.tree"):
-        for i in range(5):
-            ro.create_group(f"ro/{i}")
-            ro.flush()
-    assert ro.to_payload(set())["groups"].keys() >= {"ro/0", "ro/4"}
-    assert sum("cannot write the run tree" in r.message for r in caplog.records) == 1
-    with pytest.raises(TreeWriteError):
-        ro.set_doc("ro/0", "README.md", "nope")
-    assert ro.to_payload(set())["groups"]["ro/0"]["docs"] == []
+    tree.create_group("exp/a")
+    tree.set_doc("exp/a", "README.md", "hi")
+    tree.set_run_group("run1", "exp/a")
+    tree.move_group("exp/a", "exp/b")
 
-    # The warning latch clears on success, so a later outage is not silent.
-    ws.read_only = False
-    ro.create_group("ro/back")
-    ro.flush()
-    ws.read_only = True
-    with caplog.at_level("WARNING", logger="nebo.server.tree"):
-        caplog.clear()
-        ro.create_group("ro/again")
-        ro.flush()
-    assert sum("cannot write the run tree" in r.message for r in caplog.records) == 1
+    assert tree.get_doc("exp/b", "README.md") == "hi"
+    assert tree.get_doc("exp/a", "README.md") is None
+    assert tree.to_payload({"run1"})["runs"] == {"run1": "exp/b"}
+    assert (tmp_path / "meta" / "tree.json").is_file()
+
+    # Survives a reload, and a group with no docs deletes cleanly.
+    tree.create_group("exp/c")
+    tree.delete_group("exp/c", set())
+    assert "exp/b" in TreeStore(tmp_path / "meta").to_payload(set())["groups"]

@@ -139,12 +139,13 @@ edit the secret in this Space's Settings panel."""
 _BUCKET_INTAKE = """\
 ## Where the runs come from
 
-This Space serves runs out of [`${logdir_repo}`](https://huggingface.co/\
-datasets/${logdir_repo}) rather than its own disk, so it holds no durable
-state — it can be rebuilt or scaled to zero and the same runs come back.
+This Space serves runs out of the archive at `${logdir_uri}` rather than its
+own disk, so it holds no durable state — it can be rebuilt or scaled to zero
+and the same runs come back.
 
-It therefore does **not** accept runs pushed over the network. Log locally
-and publish the `.nebo` files to that dataset:
+The daemon **only reads** that archive: a `.nebo` file is an append-only event
+stream and object storage cannot append. So this Space does not accept runs
+pushed over the network either. Log locally, then publish the files:
 
 ```python
 import nebo as nb
@@ -158,18 +159,18 @@ step()   # writes ./.nebo/<timestamp>_<run_id>.nebo
 ```
 
 ```python
-from huggingface_hub import HfApi
+from huggingface_hub import sync_bucket
 
-HfApi().upload_folder(
-    folder_path=".nebo",
-    repo_id="${logdir_repo}",
-    repo_type="dataset",
-    allow_patterns=["*.nebo"],
-    delete_patterns=["*.nebo"],   # replace, rather than accumulate
+sync_bucket(
+    source=".nebo",
+    dest="${logdir_uri}",
+    delete=True,   # mirror the local directory, rather than accumulate
 )
 ```
 
-The daemon picks them up on its next scan."""
+The daemon picks them up on its next scan. To organize runs into groups, set
+`NEBO_GROUP` when you log — it travels in the `.nebo` header, so the run tree
+rebuilds itself from the archive with nothing extra to publish."""
 
 
 def _render_readme(space_id: str, logdir: Optional[str] = None) -> str:
@@ -182,7 +183,7 @@ def _render_readme(space_id: str, logdir: Optional[str] = None) -> str:
         from nebo.server.workspace import parse_hf_uri
 
         intake = Template(_BUCKET_INTAKE).substitute(
-            logdir_repo=parse_hf_uri(logdir).repo_id,
+            logdir_uri=parse_hf_uri(logdir).uri,
         )
     else:
         intake = Template(_PUSH_INTAKE).substitute(space_url=space_url)
@@ -204,15 +205,20 @@ _DATA_COMMENT = """\
 
 # NOTE: /data only survives a restart if this Space has persistent storage
 # attached. Without it, a Space that scales to zero loses every run. Deploy
-# with `nebo deploy --logdir hf://datasets/<owner>/<name>` to read runs from
-# a Hub repo instead, which is durable regardless."""
+# with `nebo deploy --logdir hf://buckets/<owner>/<name>` to read runs from a
+# Storage Bucket instead, which is durable regardless."""
 
 _BUCKET_COMMENT = """\
-# Runs are read from a Hugging Face repo rather than local disk, so this
-# Space holds no durable state: it can be rebuilt or scaled to zero and
-# still serve the same runs. The daemon rebuilds its run list from the
-# .nebo file headers in the bucket on every cold start. Network run
-# creation is rejected (no --remote) — the bucket is the only intake."""
+# Runs are read from a Hugging Face archive rather than local disk, so this
+# Space holds no durable state: it can be rebuilt or scaled to zero and still
+# serve the same runs. The daemon rebuilds its run list — groups included,
+# since NEBO_GROUP rides in the header — from the .nebo file headers on every
+# cold start.
+#
+# The daemon only ever READS the archive. A .nebo file is an append-only event
+# stream and object storage cannot append, so publishing is a separate step
+# (sync a local directory up). Network run creation is rejected too (no
+# --remote): the archive is the only intake."""
 
 
 def _serve_argv(logdir: Optional[str]) -> list[str]:
@@ -298,7 +304,7 @@ def cmd_deploy(args: argparse.Namespace) -> None:
             print(
                 f"Error: --logdir must be an hf:// URI (got {logdir!r}).\n"
                 "  A Space has no durable local disk to point at — use e.g.\n"
-                "  --logdir hf://datasets/<owner>/<name>",
+                "  --logdir hf://buckets/<owner>/<name>",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -372,20 +378,6 @@ def cmd_deploy(args: argparse.Namespace) -> None:
     else:
         install_block = f"RUN pip install --no-cache-dir 'nebo{extra}'"
 
-    # An HF token on the Space is only needed to *write* the run tree back to
-    # the bucket. It is never derived from the ambient deploy credential:
-    # that token is usually full-scope, and a Space secret is a much wider
-    # blast radius than a one-off CLI invocation.
-    hf_secret = getattr(args, "hf_token_secret", None)
-    if hf_secret:
-        print("Setting HF_TOKEN secret on the Space...")
-        api.add_space_secret(
-            repo_id=space_id,
-            key="HF_TOKEN",
-            value=hf_secret,
-            description="Hugging Face token the daemon uses for its hf:// logdir.",
-        )
-
     dockerfile = _render_dockerfile(install_block, logdir)
     readme = _render_readme(space_id, logdir)
 
@@ -432,12 +424,11 @@ def cmd_deploy(args: argparse.Namespace) -> None:
     print(f"  Access:   read={read_mode}, write={write_mode}")
     if logdir:
         print(f"  Logdir:   {logdir}")
-        if not hf_secret:
-            print(
-                "            (read-only: no HF_TOKEN secret set, so run-tree\n"
-                "             edits stay in memory. Pass --hf-token-secret to\n"
-                "             persist them.)"
-            )
+        print("            (archive: the daemon reads it and never writes)")
+        print(
+            "            A private archive needs HF_TOKEN set in this Space's\n"
+            "            Settings -> Secrets; a public one needs nothing."
+        )
     print()
     print("Connect your SDK by setting these env vars locally:")
     print(f"  export NEBO_URI={space_url}")

@@ -531,8 +531,16 @@ Commands
         Random if omitted; printed once after the deploy completes.
 
     ``--hf-token TOKEN``
-        Hugging Face write token. Defaults to the ``HF_TOKEN`` env or
-        a cached login (``huggingface-cli login``).
+        Hugging Face write token — deploying creates the Space and uploads
+        to it. Defaults to the ``HF_TOKEN`` env or a cached login
+        (``huggingface-cli login``).
+
+    ``--logdir HF_URI``
+        Serve runs from a Hugging Face archive (e.g.
+        ``hf://buckets/me/runs``) instead of the Space's ephemeral
+        ``/data`` volume, so they survive rebuilds and scale-to-zero. The
+        Space then only reads the archive and accepts no writes. See
+        :ref:`bucket-workspaces`.
 
     ``--private``
         Create the Space as HF-private (visible only to your account).
@@ -739,15 +747,16 @@ Daemon-side (read by ``nebo serve``):
 
 ``NEBO_LOGDIR``
     The daemon's workspace root (watched location, cache anchor, and
-    ``meta/`` home). A local directory or a Hugging Face repo
-    (``hf://datasets/<owner>/<name>``). Set automatically by
-    ``nebo serve --logdir``.
+    ``meta/`` home). A local directory, or a Hugging Face archive —
+    ``hf://buckets/<owner>/<name>`` for a Storage Bucket, or
+    ``hf://datasets/<owner>/<name>`` for a versioned repo. An archive is
+    read-only to the daemon. Set automatically by ``nebo serve --logdir``.
 
 ``HF_TOKEN``
-    Hugging Face credential for an ``hf://`` workspace. Read access is
-    enough to serve runs; write access is only needed to persist the run
-    tree. Set by ``nebo serve --hf-token``, and read directly by
-    ``huggingface_hub`` otherwise.
+    Hugging Face credential for an ``hf://`` workspace. Read access is all
+    the daemon uses, so a public archive needs no token at all. Set by
+    ``nebo serve --hf-token``, and read directly by ``huggingface_hub``
+    otherwise.
 
 ``NEBO_POLL_INTERVAL``
     Seconds between workspace scans. Defaults to 0.5 locally and 30 for a

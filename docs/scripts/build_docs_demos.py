@@ -1,22 +1,27 @@
-"""Run every docs demo and publish the resulting runs to a Hugging Face dataset.
+"""Run every docs demo and publish the resulting runs to a Hugging Face bucket.
 
 Pipeline:
 
   1. Walk ``docs/demos/**/*.py``.
   2. For each script, derive a stable ``run_id`` from its path
      (``docs/demos/<section>/<n>_<name>.py`` -> ``docs-<section>-<name>``).
-  3. Execute the script with ``NEBO_URI=<build_dir>`` and
-     ``NEBO_RUN_ID=<derived>`` so a ``.nebo`` file lands in the build dir
-     with the pinned ID, then rename it to ``<run_id>.nebo``.
-  4. Upload the whole build dir to the dataset repo in **one commit** that
-     also deletes every ``*.nebo`` already there, so the bucket ends up
-     holding exactly the runs this build produced.
+  3. Execute the script with ``NEBO_URI=<build_dir>``, ``NEBO_RUN_ID=<derived>``
+     and ``NEBO_GROUP=<section>`` so a ``.nebo`` file lands in the build dir
+     with the pinned ID and its group baked into the header, then rename it to
+     ``<run_id>.nebo``.
+  4. Sync the build dir into a Storage Bucket with ``delete=True``, so the
+     bucket ends up holding exactly the runs this build produced.
 
 The demos Space serves those files directly (``nebo serve --logdir
-hf://datasets/<owner>/<name>``), so the runs outlive the Space: it can be
-rebuilt or scaled to zero and still show the same dashboards. That is the
-whole point of publishing to a bucket rather than replaying events into a
-daemon's memory, which is what this script used to do via ``nebo load``.
+hf://buckets/<owner>/<name>``) and **only reads** them: a ``.nebo`` file is an
+append-only stream and object storage cannot append, so this script is the one
+writer. The runs therefore outlive the Space, which can be rebuilt or scaled to
+zero and still show the same dashboards — the whole point of publishing to an
+archive rather than replaying events into a daemon's memory, which is what this
+script used to do via ``nebo load``.
+
+Grouping needs no ``meta/``: ``NEBO_GROUP`` lands in the ``.nebo`` header, and
+the daemon re-derives the run tree from those headers on every scan.
 
 Filenames are pinned to ``<run_id>.nebo`` — dropping the SDK's timestamp
 prefix — so each rebuild replaces the same paths instead of accumulating one
@@ -28,7 +33,7 @@ changes its run ID — fix the ``.rst`` to match.
 
 Usage::
 
-    NEBO_DEMOS_DATASET=rsamf/nebo-demo-runs \\
+    NEBO_DEMOS_BUCKET=rsamf/nebo-demo-runs \\
     HF_TOKEN=hf_xxx \\
     uv run python docs/scripts/build_docs_demos.py
 
@@ -74,17 +79,30 @@ def discover_demos(section: str | None) -> list[Path]:
     return scripts
 
 
+def derive_group(script: Path) -> str:
+    """``docs/demos/guide/2_log_line.py`` -> ``guide``.
+
+    The section directory becomes the run's group, so the Space sidebar
+    mirrors the docs structure. This rides in the ``.nebo`` header, which is
+    why the archive needs no ``meta/``.
+    """
+    return script.relative_to(DEMOS_ROOT).parts[0]
+
+
 def run_demo(script: Path, build_dir: Path) -> Path:
     """Execute one demo and return the .nebo file it produced."""
     run_id = derive_run_id(script)
+    group = derive_group(script)
     env = {
         **os.environ,
         "NEBO_URI": str(build_dir),
         "NEBO_RUN_ID": run_id,
+        "NEBO_GROUP": group,
         "NEBO_QUIET": "1",
     }
     env.pop("NEBO_NO_STORE", None)
-    print(f"  -> running {script.relative_to(REPO_ROOT)} (run_id={run_id})")
+    print(f"  -> running {script.relative_to(REPO_ROOT)} "
+          f"(run_id={run_id}, group={group})")
     subprocess.run(
         [sys.executable, str(script)],
         cwd=REPO_ROOT,
@@ -108,15 +126,17 @@ def run_demo(script: Path, build_dir: Path) -> Path:
     return final
 
 
-def upload(build_dir: Path, dataset: str, token: str | None) -> None:
-    """Publish the build dir to the dataset, replacing what was there.
+def upload(build_dir: Path, bucket_id: str, token: str | None) -> None:
+    """Sync the build dir into the bucket, replacing what was there.
 
-    One commit: `delete_patterns` removes every stale `*.nebo` in the same
-    revision that adds the new ones, so the bucket is never half-updated and
-    a run whose demo script was deleted does not linger.
+    ``delete=True`` removes destination objects absent from the source, so the
+    bucket ends up a byte-for-byte mirror of this build — fully reproducible.
+    There is deliberately no exclude: this script is the only writer, and the
+    daemon that serves the bucket never writes to it, so anything else in there
+    is stale by definition.
     """
     try:
-        from huggingface_hub import HfApi
+        from huggingface_hub import create_bucket, sync_bucket
     except ImportError:
         print(
             "huggingface_hub is required to publish demo runs. Install with:\n"
@@ -127,26 +147,21 @@ def upload(build_dir: Path, dataset: str, token: str | None) -> None:
         )
         raise
 
-    api = HfApi(token=token)
-    print(f"Ensuring dataset {dataset} exists...")
+    print(f"Ensuring bucket {bucket_id} exists...")
     # Created on first run, so there is nothing to set up by hand. Public on
-    # purpose: the demos Space reads this repo anonymously (no HF_TOKEN secret
-    # is set on it), so a private dataset would serve zero runs.
-    api.create_repo(
-        repo_id=dataset, repo_type="dataset", private=False, exist_ok=True,
-    )
+    # purpose: the demos Space reads it anonymously (no HF_TOKEN secret is set
+    # on the Space), so a private bucket would serve zero runs.
+    create_bucket(bucket_id, private=False, exist_ok=True, token=token)
 
     files = sorted(p.name for p in build_dir.glob("*.nebo"))
-    print(f"Uploading {len(files)} run(s) to hf://datasets/{dataset}:")
+    print(f"Syncing {len(files)} run(s) to hf://buckets/{bucket_id}:")
     for name in files:
         print(f"  -> {name}")
-    api.upload_folder(
-        folder_path=str(build_dir),
-        repo_id=dataset,
-        repo_type="dataset",
-        allow_patterns=["*.nebo"],
-        delete_patterns=["*.nebo"],
-        commit_message=f"docs demos: publish {len(files)} run(s)",
+    sync_bucket(
+        source=str(build_dir),
+        dest=f"hf://buckets/{bucket_id}",
+        delete=True,
+        token=token,
     )
 
 
@@ -167,10 +182,10 @@ def main() -> int:
         help="Skip publishing; just produce .nebo files locally.",
     )
     parser.add_argument(
-        "--dataset",
-        default=os.environ.get("NEBO_DEMOS_DATASET"),
-        help="Hugging Face dataset repo to publish into, as <owner>/<name>. "
-             "Default: $NEBO_DEMOS_DATASET.",
+        "--bucket",
+        default=os.environ.get("NEBO_DEMOS_BUCKET"),
+        help="Hugging Face Storage Bucket to publish into, as <owner>/<name>. "
+             "Default: $NEBO_DEMOS_BUCKET.",
     )
     parser.add_argument(
         "--hf-token",
@@ -182,19 +197,19 @@ def main() -> int:
     # Validate the publish arguments before spending a couple of minutes
     # running 18 demo scripts.
     if not args.no_upload:
-        if not args.dataset:
+        if not args.bucket:
             print(
-                "ERROR: --dataset is required for upload. "
-                "Set NEBO_DEMOS_DATASET, or pass --no-upload.",
+                "ERROR: --bucket is required for upload. "
+                "Set NEBO_DEMOS_BUCKET, or pass --no-upload.",
                 file=sys.stderr,
             )
             return 2
-        # Publishing replaces every *.nebo in the dataset, so a partial build
-        # would delete the sections it did not produce.
+        # Publishing mirrors the build dir, so a partial build would delete
+        # the sections it did not produce.
         if args.section:
             print(
                 f"ERROR: --section only builds {args.section!r}, but publishing "
-                "replaces every run in the dataset. Use --no-upload with "
+                "replaces every run in the bucket. Use --no-upload with "
                 "--section, or run a full build to publish.",
                 file=sys.stderr,
             )
@@ -219,9 +234,9 @@ def main() -> int:
         print(f"\nWrote {len(produced)} .nebo file(s) to {build_dir}. Skipping upload.")
         return 0
 
-    upload(build_dir, args.dataset, args.hf_token)
+    upload(build_dir, args.bucket, args.hf_token)
 
-    print(f"\nPublished {len(produced)} run(s) to hf://datasets/{args.dataset}")
+    print(f"\nPublished {len(produced)} run(s) to hf://buckets/{args.bucket}")
     return 0
 
 
