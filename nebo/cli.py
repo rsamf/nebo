@@ -1600,12 +1600,6 @@ def main() -> None:
              "volume. Runs then survive rebuilds and scale-to-zero. The Space "
              "only reads the archive; publish to it separately.",
     )
-    p_deploy.add_argument(
-        "--hf-token-secret",
-        help="Set HF_TOKEN as a Space secret so the daemon can read a "
-             "*private* hf:// --logdir. Omit for a public one, which needs no "
-             "token (the daemon never writes, so read access is all it uses).",
-    )
     p_deploy.add_argument("--from-source", action="store_true", help="Build a wheel from this checkout and ship it instead of installing from PyPI")
     p_deploy.add_argument("--read", choices=["public", "private"], default="public", help="Read access mode (default: public — anyone can view).")
     p_deploy.add_argument("--write", choices=["public", "private"], default="private", help="Write access mode (default: private — token required to push events / control runs).")

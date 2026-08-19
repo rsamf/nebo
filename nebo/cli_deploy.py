@@ -304,7 +304,7 @@ def cmd_deploy(args: argparse.Namespace) -> None:
             print(
                 f"Error: --logdir must be an hf:// URI (got {logdir!r}).\n"
                 "  A Space has no durable local disk to point at — use e.g.\n"
-                "  --logdir hf://datasets/<owner>/<name>",
+                "  --logdir hf://buckets/<owner>/<name>",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -378,20 +378,6 @@ def cmd_deploy(args: argparse.Namespace) -> None:
     else:
         install_block = f"RUN pip install --no-cache-dir 'nebo{extra}'"
 
-    # The daemon never writes, so an HF token on the Space is only needed to
-    # *read* a private archive. It is never derived from the ambient deploy
-    # credential: that token is usually full-scope, and a Space secret is a
-    # much wider blast radius than a one-off CLI invocation.
-    hf_secret = getattr(args, "hf_token_secret", None)
-    if hf_secret:
-        print("Setting HF_TOKEN secret on the Space...")
-        api.add_space_secret(
-            repo_id=space_id,
-            key="HF_TOKEN",
-            value=hf_secret,
-            description="Hugging Face read token for the daemon's hf:// logdir.",
-        )
-
     dockerfile = _render_dockerfile(install_block, logdir)
     readme = _render_readme(space_id, logdir)
 
@@ -439,11 +425,10 @@ def cmd_deploy(args: argparse.Namespace) -> None:
     if logdir:
         print(f"  Logdir:   {logdir}")
         print("            (archive: the daemon reads it and never writes)")
-        if not hf_secret:
-            print(
-                "            No HF_TOKEN secret set, so the archive must be\n"
-                "            public. Pass --hf-token-secret for a private one."
-            )
+        print(
+            "            A private archive needs HF_TOKEN set in this Space's\n"
+            "            Settings -> Secrets; a public one needs nothing."
+        )
     print()
     print("Connect your SDK by setting these env vars locally:")
     print(f"  export NEBO_URI={space_url}")

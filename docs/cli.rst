@@ -410,26 +410,29 @@ to a URL and watch them from anywhere (the UI is mobile-friendly).
 
 .. option:: --logdir <hf-uri>
 
-    Serve runs from a Hugging Face repo (see :ref:`bucket-workspaces`)
+    Serve runs from a Hugging Face archive (see :ref:`bucket-workspaces`)
     instead of the Space's ``/data`` volume::
 
-        nebo deploy --space-id me/dash --logdir hf://datasets/me/runs
+        nebo deploy --space-id me/dash --logdir hf://buckets/me/runs
 
     This matters because a Space's ``/data`` only survives a restart if
     the Space has paid persistent storage attached — otherwise a Space
-    that scales to zero loses every run it was holding. Reading from a
-    repo makes the Space stateless: rebuild it, pause it, or let it sleep,
-    and the same runs come back. With ``--logdir`` the Space stops
-    accepting network runs; publish ``.nebo`` files to the repo instead.
+    that scales to zero loses every run it was holding. Reading from an
+    archive makes the Space stateless: rebuild it, pause it, or let it
+    sleep, and the same runs come back.
 
-.. option:: --hf-token-secret <token>
+    With ``--logdir`` the Space accepts **no writes at all** — not runs
+    pushed over the network, and not run-tree edits, which return ``409``.
+    Publish to the archive separately; see
+    :ref:`bucket-workspaces` for the ``sync_bucket`` recipe and for
+    organizing runs with ``NEBO_GROUP``.
 
-    Set ``HF_TOKEN`` as a Space secret so the daemon can write its run
-    tree back to an ``hf://`` ``--logdir``. Opt-in, and deliberately never
-    inherited from the token used to deploy — that one is usually
-    full-scope, and a Space secret is a much wider blast radius. Without
-    it the Space reads the repo anonymously (fine for a public one) and
-    run-tree edits stay in memory.
+    A public archive needs no credential. For a private one, add
+    ``HF_TOKEN`` under the Space's **Settings → Secrets** — a read token is
+    enough, since the daemon never writes. ``nebo deploy`` deliberately
+    does not plant that secret for you: the token it deploys with is
+    write-scoped, and a Space secret can be read by anyone who can push to
+    the Space.
 
 .. option:: --from-source
 

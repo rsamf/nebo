@@ -531,8 +531,16 @@ Commands
         Random if omitted; printed once after the deploy completes.
 
     ``--hf-token TOKEN``
-        Hugging Face write token. Defaults to the ``HF_TOKEN`` env or
-        a cached login (``huggingface-cli login``).
+        Hugging Face write token — deploying creates the Space and uploads
+        to it. Defaults to the ``HF_TOKEN`` env or a cached login
+        (``huggingface-cli login``).
+
+    ``--logdir HF_URI``
+        Serve runs from a Hugging Face archive (e.g.
+        ``hf://buckets/me/runs``) instead of the Space's ephemeral
+        ``/data`` volume, so they survive rebuilds and scale-to-zero. The
+        Space then only reads the archive and accepts no writes. See
+        :ref:`bucket-workspaces`.
 
     ``--private``
         Create the Space as HF-private (visible only to your account).

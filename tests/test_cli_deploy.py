@@ -136,7 +136,7 @@ def test_logdir_deploy_points_the_space_at_the_bucket() -> None:
             "space_id": "alice/my-dashboard", "hf_token": "hf_xxx",
             "api_token": "nb_test_token", "private": False, "from_source": False,
             "read": "public", "write": "private", "logdir": None,
-            "hf_token_secret": None, "wait": False, **over,
+            "wait": False, **over,
         })
         with patch.dict(sys.modules, {
             "huggingface_hub": fake_module, "huggingface_hub.utils": fake_utils,
@@ -156,23 +156,24 @@ def test_logdir_deploy_points_the_space_at_the_bucket() -> None:
     files, secrets = run()
     assert cmd(files["Dockerfile"]) == base + ', "--remote", "/data", "--no-local"]'
     assert "Connect from Python" in files["README.md"]
+    # nebo never puts an HF credential into a Space. The deploy token is
+    # write-scoped and a Space secret is readable by anyone who can push
+    # there, so a private archive is configured by hand in Space settings.
+    assert secrets == {"NEBO_API_TOKEN"}
 
     # With a bucket: watcher on, no network intake, and the Space page stops
     # telling visitors to push runs it would reject. The install line must
     # carry [deploy] or the daemon cannot import huggingface_hub and the
     # Space never boots.
     files, secrets = run(logdir="hf://buckets/acme/runs")
+    assert secrets == {"NEBO_API_TOKEN"}
     assert cmd(files["Dockerfile"]) == base + ', "--logdir", "hf://buckets/acme/runs"]'
     # The Space page must say the archive is read-only and show how to publish.
     assert "only reads" in files["README.md"]
     assert "sync_bucket" in files["README.md"]
     assert "hf://buckets/acme/runs" in files["README.md"]
     assert "NEBO_GROUP" in files["README.md"]
-    # The deploy credential is usually full-scope — never leak it implicitly.
-    assert secrets == {"NEBO_API_TOKEN"}
     assert "nebo[deploy]" in files["Dockerfile"]
-    _, secrets = run(logdir="hf://buckets/acme/runs", hf_token_secret="hf_write")
-    assert secrets == {"NEBO_API_TOKEN", "HF_TOKEN"}
 
     # A Space has no durable local disk to point at.
     for bad in ("/var/lib/nebo", "hf://buckets/acme", "hf://buckets/a/b@rev"):
