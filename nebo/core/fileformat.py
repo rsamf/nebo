@@ -119,6 +119,8 @@ ENTRY_TYPES = {
     "run_config": 18,
     "loggable_register": 19,  # v2: replaces node_register
     "metric_batch": 20,  # v4: columnar batch of line/scatter points
+    "body_model": 21,  # action modality: a compiled GLB body model
+    "body_transform": 22,  # action modality: one scene frame of poses
 }
 
 ENTRY_TYPES_REVERSE = {v: k for k, v in ENTRY_TYPES.items()}

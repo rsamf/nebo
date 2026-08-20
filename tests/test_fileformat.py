@@ -490,3 +490,47 @@ class TestTextEntryRename:
         (entry,) = list(reader.read_entries())
         assert entry["type"] == "text"
         assert entry["payload"] == payload
+
+
+# --- action modality entries (codes 21 / 22) -------------------------------
+
+
+def test_body_entries_round_trip(tmp_path):
+    from nebo.core.fileformat import NeboFileReader, NeboFileWriter
+
+    path = tmp_path / "bodies.nebo"
+    with open(path, "wb") as f:
+        writer = NeboFileWriter(f, "run1", "sim.py")
+        writer.write_header()
+        writer.write_entry("body_model", {
+            "type": "body_model", "loggable_id": "__global__", "name": "arm",
+            "model_id": "abc123", "body_names": ["world", "link1"],
+            "source_format": "mjcf", "data": b"glTF\x02\x00\x00\x00",
+        })
+        writer.write_entry("body_transform", {
+            "type": "body_transform", "loggable_id": "__global__",
+            "name": "scene", "step": 0, "timestamp": 1.0,
+            "instances": {
+                "policy": {"model": "abc123", "pos_quat_xyzw": [0.0] * 14},
+            },
+        })
+
+    with open(path, "rb") as f:
+        reader = NeboFileReader(f)
+        reader.read_header()
+        entries = list(reader.read_entries())
+
+    assert [e["type"] for e in entries] == ["body_model", "body_transform"]
+    # GLB bytes survive as msgpack bin, not base64.
+    assert entries[0]["payload"]["data"] == b"glTF\x02\x00\x00\x00"
+    assert entries[1]["payload"]["instances"]["policy"]["model"] == "abc123"
+
+
+def test_action_codes_are_stable_and_additive():
+    from nebo.core.fileformat import ENTRY_TYPES, FORMAT_VERSION
+
+    # On-disk codes are permanent; FORMAT_VERSION stays 4 so older readers
+    # degrade gracefully instead of rejecting the header.
+    assert ENTRY_TYPES["body_model"] == 21
+    assert ENTRY_TYPES["body_transform"] == 22
+    assert FORMAT_VERSION == 4

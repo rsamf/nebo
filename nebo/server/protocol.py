@@ -19,6 +19,10 @@ class MessageType(str, Enum):
     IMAGE = "image"
     ALERT = "alert"
     AUDIO = "audio"
+    # Action modality: a compiled GLB body model, then per-step frames of
+    # per-body world poses referencing it.
+    BODY_MODEL = "body_model"
+    BODY_TRANSFORM = "body_transform"
     PROGRESS = "progress"
     LOGGABLE_REGISTER = "loggable_register"
     EDGE = "edge"
