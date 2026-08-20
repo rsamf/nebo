@@ -5,9 +5,12 @@ from __future__ import annotations
 import logging as _stdlib_logging
 import time
 import warnings
-from typing import Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from nebo.core.state import MetricCursor, _current_node, get_state
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from nebo.logging.bodies import BodyModelRef
 
 
 GLOBAL_LOGGABLE_ID = "__global__"
@@ -513,6 +516,150 @@ def log_audio(audio: Any, sr: int = 16000, *, name: Optional[str] = None, step: 
     }
 
     state._send_to_client(entry)
+
+
+def log_body_model(
+    name: str,
+    *,
+    mjcf: Optional[Any] = None,
+    urdf: Optional[Any] = None,
+) -> "BodyModelRef":
+    """Publish a robot/scene description once and return a reference to it.
+
+    Exactly one of ``mjcf=`` / ``urdf=`` is required. Each accepts a
+    filesystem path or an inline XML string; ``mjcf=`` additionally
+    accepts an already-compiled ``mujoco.MjModel``, which skips
+    recompiling a large model you already have in hand.
+
+    The description is flattened to a single self-contained GLB (visual
+    *and* collision geometry, one node per body) and published as
+    ordinary content-addressed media, so it rides in the ``.nebo`` file
+    and dedupes across runs.
+
+    Unlike ``log_image`` / ``log_audio``, this call is **eager**: the GLB
+    is compiled and hashed on the calling thread (~0.1-2 s, once per
+    model) because the returned reference must carry the content
+    address. Re-publishing identical bytes within a run returns the
+    cached reference and emits nothing.
+
+    Requires the robotics extra: ``pip install 'nebo[robotics]'``.
+
+    Args:
+        name: Display name for the model (e.g. ``"g1"``).
+        mjcf: MJCF path, inline XML, or ``mujoco.MjModel``.
+        urdf: URDF path or inline XML.
+
+    Returns:
+        A ``BodyModelRef`` to pass to :func:`log_body_transform`. Its
+        ``body_names`` gives the body order every pose array must follow.
+    """
+    _ensure_initialized()
+    from nebo.extras.robotics import compile_model
+    from nebo.logging.bodies import BodyModelRef
+
+    state = get_state()
+    node_id = _current_node.get() or GLOBAL_LOGGABLE_ID
+    state.ensure_loggable(node_id)
+
+    compiled = compile_model(mjcf=mjcf, urdf=urdf)
+    model_id = compiled.model_id
+
+    cached = state._body_models.get(model_id)
+    if cached is not None:
+        return cached
+
+    ref = BodyModelRef(
+        name=name,
+        model_id=model_id,
+        body_names=compiled.body_names,
+        source_format=compiled.source_format,
+    )
+    state._body_models[model_id] = ref
+    state._body_model_names[name] = ref
+
+    state._send_to_client({
+        "type": "body_model",
+        "loggable_id": node_id,
+        "name": name,
+        "model_id": model_id,
+        "body_names": list(compiled.body_names),
+        "source_format": compiled.source_format,
+        "data": compiled.glb,
+        "timestamp": time.time(),
+    })
+    return ref
+
+
+def log_body_transform(
+    name: str,
+    model: Union["BodyModelRef", str],
+    pos_quat_xyzw: Any,
+    *,
+    step: Optional[int] = None,
+) -> None:
+    """Log one frame of a 3D scene: where every body of a model is.
+
+    Args:
+        name: The **scene** name. Like an image or metric name it becomes
+            one card, one tracker stream and one embed target.
+        model: A ``BodyModelRef`` from :func:`log_body_model`, or the
+            ``name`` a model was published under in this run.
+        pos_quat_xyzw: Per-body **world** poses, in the model's body
+            order (``ref.body_names``):
+
+            * ``(N, 7)`` — ``[x, y, z, qx, qy, qz, qw]`` per body, or
+            * ``(N, 4, 4)`` — homogeneous transforms, or
+            * a ``{label: poses}`` dict putting several instances in one
+              scene (a reference pose beside a policy-actuated one),
+              mirroring ``log_bar`` / ``log_scatter``'s ``{label: value}``.
+
+            Quaternions are vector-scalar (``xyzw``); MuJoCo users can
+            convert with ``nebo.extras.robotics.mj_pose``.
+        step: Auto-increments per ``(loggable, name)`` when omitted,
+            exactly like ``log_line``.
+
+    Raises:
+        ValueError: If a pose array's body count does not match the model.
+    """
+    _ensure_initialized()
+    from nebo.logging.bodies import normalize_instances
+
+    state = get_state()
+    node_id = _current_node.get() or GLOBAL_LOGGABLE_ID
+    timestamp = time.time()
+    state.ensure_loggable(node_id)
+
+    if isinstance(model, str):
+        resolved = state._body_model_names.get(model)
+        if resolved is None:
+            known = ", ".join(sorted(state._body_model_names)) or "none"
+            raise ValueError(
+                f"no body model named {model!r} has been published in this "
+                f"run (known: {known}). Call nb.log_body_model() first and "
+                f"pass the reference it returns."
+            )
+        model = resolved
+
+    instances = normalize_instances(pos_quat_xyzw, len(model.body_names))
+
+    cursors = state._action_cursors.setdefault(node_id, {})
+    if step is None:
+        step = cursors.get(name, 0)
+    # Always advance past the highest step seen, so an explicit step=N
+    # followed by an auto-step continues at N+1 (matching _emit_metric).
+    cursors[name] = max(cursors.get(name, 0), step + 1)
+
+    state._send_to_client({
+        "type": "body_transform",
+        "loggable_id": node_id,
+        "name": name,
+        "step": step,
+        "timestamp": timestamp,
+        "instances": {
+            label: {"model": model.model_id, "pos_quat_xyzw": flat}
+            for label, flat in instances.items()
+        },
+    })
 
 
 def md(description: str) -> None:

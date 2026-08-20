@@ -36,6 +36,10 @@ STRUCTURAL_TYPES = frozenset({
     "run_start", "run_completed", "loggable_register", "edge",
     "node_executed", "config", "ui_config", "run_config", "description",
     "alert", "error",
+    # A pose frame without its model is unrenderable, so the model event
+    # is never dropped. body_transform stays droppable — losing frames
+    # thins a scene's timeline, exactly like thinning a metric series.
+    "body_model",
 })
 
 DEFAULT_BUFFER_BUDGET_MB = 128

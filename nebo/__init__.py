@@ -27,6 +27,8 @@ from nebo.alerts import AlertLevel, alert
 from nebo.notebook import show
 from nebo import labels
 from nebo.core import groups
+from nebo.logging.bodies import BodyModelRef
+from nebo.extras import robotics
 from nebo.logging.logger import (
     log,  # deprecated shim over log_text; warns once, removed in a later release
     log_text,
@@ -37,6 +39,8 @@ from nebo.logging.logger import (
     log_histogram,
     log_image,
     log_audio,
+    log_body_model,
+    log_body_transform,
     md,
 )
 

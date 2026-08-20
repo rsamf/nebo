@@ -133,6 +133,8 @@ class _RunSnapshot:
     ui_config: Optional[dict]
     linear_last: Optional[str]
     metric_cursors: dict
+    body_models: dict
+    action_cursors: dict
 
 
 # Events that *describe* a run rather than carry run data. A run whose
@@ -180,6 +182,15 @@ class SessionState:
         # Per-loggable, per-metric-name cursor for type-lock + auto-step.
         # Replaces the old loggable.metrics["entries"] mirror.
         self._metric_cursors: dict[str, dict[str, MetricCursor]] = {}
+        # Body models published by nb.log_body_model, keyed by content
+        # address and by user-facing name. Per-*run* state: the model's
+        # GLB is emitted into one run's event stream, so a new run must
+        # re-publish it rather than reuse a ref the run never received.
+        self._body_models: dict[str, Any] = {}
+        self._body_model_names: dict[str, Any] = {}
+        # Per-loggable, per-scene next auto-step for nb.log_body_transform,
+        # the action-modality twin of _metric_cursors' line/scatter branch.
+        self._action_cursors: dict[str, dict[str, int]] = {}
         self.workflow_description: Optional[str] = None
         self.port: int = 7861
         self.server_process: Any = None
@@ -490,6 +501,11 @@ class SessionState:
                     lid: dict(cursors)
                     for lid, cursors in self._metric_cursors.items()
                 },
+                body_models=dict(self._body_models),
+                action_cursors={
+                    lid: dict(cursors)
+                    for lid, cursors in self._action_cursors.items()
+                },
             )
 
     def restore_run_state(self, run_id: str) -> None:
@@ -518,6 +534,14 @@ class SessionState:
                 lid: dict(cursors)
                 for lid, cursors in snap.metric_cursors.items()
             }
+            self._body_models = dict(snap.body_models)
+            self._body_model_names = {
+                ref.name: ref for ref in self._body_models.values()
+            }
+            self._action_cursors = {
+                lid: dict(cursors)
+                for lid, cursors in snap.action_cursors.items()
+            }
 
     def clear_run_state(self) -> None:
         """Reset per-run fields to empty (for new runs)."""
@@ -535,6 +559,9 @@ class SessionState:
             self._strong_origin_order.clear()
             self._node_parents.clear()
             self._metric_cursors.clear()
+            self._body_models.clear()
+            self._body_model_names.clear()
+            self._action_cursors.clear()
             self.workflow_description = None
             self.ui_config = None
             self._linear_last = None
@@ -558,6 +585,9 @@ class SessionState:
             self._strong_origin_order.clear()
             self._node_parents.clear()
             self._metric_cursors.clear()
+            self._body_models.clear()
+            self._body_model_names.clear()
+            self._action_cursors.clear()
             self._linear_last = None
             self.dag_strategy = "object"
             self.workflow_description = None
