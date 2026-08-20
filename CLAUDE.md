@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Nebo is a modern logging SDK for multi-modal data. Users decorate functions with `@nb.fn()` and emit events with `nb.log_text(name, message, *, step=None)` (named text streams — name is a required first positional, exactly like the metric helpers; there is no level/severity; `nb.log(message, *, name=None, step=None)` survives only as a deprecated forwarding shim — old argument order, one-time FutureWarning, slated for removal — the sole backwards-compat exception in the codebase), `nb.log_line` / `log_bar` / `log_pie` / `log_scatter` / `log_histogram` (one helper per chart type), `nb.log_image` (with `nb.labels.{Points, Boxes, Circles, Polygons, Bitmasks}` overlays), `nb.log_audio`, `nb.log_cfg`, `nb.alert`, and `nb.track()`. Nebo infers a DAG from the call graph and surfaces everything through append-only `.nebo` files, a FastAPI daemon, a React web UI, and MCP tools. The repo contains the Python package (`nebo/`), the web UI (`ui/`), tests (`tests/`), docs (`docs/`), and runnable examples (`examples/`).
+Nebo is a modern logging SDK for multi-modal data. Users decorate functions with `@nb.fn()` and emit events with `nb.log_text(name, message, *, step=None)` (named text streams — name is a required first positional, exactly like the metric helpers; there is no level/severity; `nb.log(message, *, name=None, step=None)` survives only as a deprecated forwarding shim — old argument order, one-time FutureWarning, slated for removal — the sole backwards-compat exception in the codebase), `nb.log_line` / `log_bar` / `log_pie` / `log_scatter` / `log_histogram` (one helper per chart type), `nb.log_image` (with `nb.labels.{Points, Boxes, Circles, Polygons, Bitmasks}` overlays), `nb.log_audio`, `nb.log_body_model` / `nb.log_body_transform` (3D robot scenes, `nebo[robotics]`), `nb.log_cfg`, `nb.alert`, and `nb.track()`. Nebo infers a DAG from the call graph and surfaces everything through append-only `.nebo` files, a FastAPI daemon, a React web UI, and MCP tools. The repo contains the Python package (`nebo/`), the web UI (`ui/`), tests (`tests/`), docs (`docs/`), and runnable examples (`examples/`).
 
 Nebo is a **logging** SDK — it does not run human-in-the-loop interactive features (no `nb.ask`, no pauseable nodes). Anything that needs to block on user input belongs outside the SDK.
 
@@ -490,12 +490,13 @@ Step filter: clicking a datapoint on a line or scatter chart sets `timeline.step
 
 **Tracker (bottom panel).** The bottom of the UI is the **Tracker** — a full-width, resizable and collapsible panel that replaces the old timeline scrubber. It is built around **streams**: a stream is a named series of datapoints within a loggable. Full stream paths are `/<func_name>/<name>` for `@nb.fn` nodes, `/agent/<name>` for the `__agent__` loggable, and `/<name>` (root) for the global loggable. `nb.log_text` entries appear under their required stream name. Names split on `/` to form a searchable tree. Key sub-components (`ui/src/components/timeline/`):
 
-- `StreamTree.tsx` — desktop-only left pane: a searchable `/`-delimited tree of text/image/audio streams (metrics are NOT in the tree), capped at 15% of the tracker width. Its sticky header stacks the stream search field and the modality chips (text/image/audio) — both hidden while the tracker is collapsed; the ruler matches the taller desktop header height so rows stay aligned. Clicking a leaf highlights it (`timeline.selectedStream`) and scrolls the main view to that loggable's card — it does **not** filter the content panels. On mobile the tree is hidden and each stream's full path is drawn left-aligned on its canvas row instead (dimmed to 30% while the user is touching the canvas).
-- `TrackerControls.tsx` — Step/Time mode dropdown, numeric step input, prev/next step arrows (also Ctrl/⌘+Left/Right), a **Reset zoom** icon button, and a **Clear all filters** button. No play/pause. Below 768px these fold into a single **Filters** popover (which holds the stream search + modality chips on mobile; `ModalityChips` is the shared component).
+- `StreamTree.tsx` — desktop-only left pane: a searchable `/`-delimited tree of text/image/audio/action streams (metrics are NOT in the tree), capped at 15% of the tracker width. Its sticky header stacks the stream search field and the modality chips (text/image/audio/action) — both hidden while the tracker is collapsed; the ruler matches the taller desktop header height so rows stay aligned. Clicking a leaf highlights it (`timeline.selectedStream`) and scrolls the main view to that loggable's card — it does **not** filter the content panels. On mobile the tree is hidden and each stream's full path is drawn left-aligned on its canvas row instead (dimmed to 30% while the user is touching the canvas).
+- `TrackerControls.tsx` — Step/Time mode dropdown, numeric step input, prev/next step arrows (also Ctrl/⌘+Left/Right), **play/pause + an fps input**, a **Reset zoom** icon button, and a **Clear all filters** button. Below 768px these fold into a single **Filters** popover (which holds the stream search + modality chips on mobile; `ModalityChips` is the shared component).
+- **Playback** (`hooks/usePlayback.ts`) advances the shared `timeline.step` at `timeline.fps` via a rAF accumulator, auto-flipping `timeline.mode` to `'step'` (the same flip clicking a chart datapoint performs) and stopping at the max step. It lives on the tracker, not on a card, precisely because every panel follows that one playhead. The step domain in `Tracker.tsx` is computed **independently of the active mode** so play and the step arrows stay reachable from Time mode. While `timeline.playing`, `useTimelineFilter` and `MobileDagCanvas` pin media to `timeline.playbackFrom` — every image/audio entry is its own HTTP fetch, so tracking a 30 fps playhead would issue 30 requests/s per panel; 3D scenes animate anyway since their poses are already in RAM. Media prefetch is deliberately out of scope.
 - `TimelineGrid.tsx` — per-stream datapoint rows with a single playhead for both step and time modes (time mode is a single playhead, not the old two-handle range). Collapsing a tree branch does NOT drop its dots: the collapsed branch row renders every visible descendant leaf's datapoints merged (per-dot modality colors via `FlatRow.mergedLeaves`). A branch that is itself a stream (`/a/b` logged alongside `/a/b/c`) renders its own datapoints on the branch row. Left-drag scrubs the playhead; **zoom is ctrl/⌘+wheel (trackpad pinch)**, pan is middle-drag or shift/horizontal wheel, and a plain vertical wheel scrolls the row list. A constant horizontal pad keeps the first/last tick and edge datapoints from clipping; the playhead carries a downward triangle handle. `ticks.ts` holds the tick-generation helper.
 - `Tracker.tsx` — top-level shell that owns the single shared vertical scroll (so the tree column and canvas render one flattened row list at matching heights and scroll together, staying row-aligned), plus collapse/search state, drag-to-resize, the collapse toggle, and the mobile flat-label rendering. Invariant: `useStreams(id, true)` stays enabled while collapsed — step navigation (Ctrl/⌘+arrows, prev/next, the step input) derives its domain from the stream model and must keep working with the panel collapsed.
 
-Supporting modules: `ui/src/lib/streams.ts` (stream path + tree-flatten helpers), `ui/src/hooks/useStreams.ts` (stream data hook), `ui/src/hooks/useAxisTransform.ts` (zoom/pan math via a native non-passive wheel listener). The store `timeline` slice is `{ mode, step, time, selectedStream }`.
+Supporting modules: `ui/src/lib/streams.ts` (stream path + tree-flatten helpers), `ui/src/hooks/useStreams.ts` (stream data hook), `ui/src/hooks/useAxisTransform.ts` (zoom/pan math via a native non-passive wheel listener). The store `timeline` slice is `{ mode, step, time, selectedStream, playing, fps, playbackFrom }`.
 
 The old `ui/src/components/timeline/TimelineScrubber.tsx` was removed.
 
@@ -512,6 +513,83 @@ Run-list/status polls pause while `document.hidden`.
 UI invariant: chart components index palette colors by `allLabels.indexOf(label)` (the full vocabulary), never by the iteration index over the filtered list — otherwise toggling a label off via the chip row reshuffles the remaining colors. `ScatterMetric` and `HistogramMetric` both follow this rule.
 
 UI invariant: chart components must NOT early-return `null` for empty data while their canvas is conditionally mounted by a parent that re-mounts on data changes. `useChartJs`'s mount effect uses `[]` deps; if the canvas remounts, the Chart instance keeps a reference to the old detached canvas and subsequent `chart.update()` calls are invisible. Always render the canvas (an empty Chart.js plot is fine); guard via the parent component's "no data" placeholder if needed.
+
+### Action modality (3D scenes)
+
+A fifth modality: per-body **world** poses of an articulated body, rendered
+in three.js. `nb.log_body_model(name, *, mjcf=|urdf=)` compiles a robot
+description **once, SDK-side** (`nebo[robotics]` = mujoco + yourdfpy +
+trimesh) into one self-contained GLB and returns a frozen `BodyModelRef`;
+`nb.log_body_transform(name, model, pos_quat_xyzw, *, step=None)` then logs
+one scene frame. Load-bearing decisions:
+
+- **World transforms, never joint coordinates.** A frame carries `7 * N`
+  floats per instance — `[x, y, z, qx, qy, qz, qw]` per body in the model's
+  body order — so nothing downstream implements forward kinematics for two
+  robot description formats. Quaternions are **vector-scalar (xyzw)**, the
+  sole accepted convention, named in every parameter and wire field.
+  `nebo/logging/bodies.py:normalize_instances` accepts `(N,7)`, `(N,4,4)`,
+  or a `{label: poses}` dict (the `log_bar`/`log_scatter` convention) and
+  flattens to `{instance: [7N floats]}`; flat costs ~half of nested in
+  msgpack.
+- **`log_body_model` is eager**, unlike the deferred `log_image`/`log_audio`
+  path, because the returned ref must carry the GLB's content address
+  (`model_id == media_id == sha256(glb)[:16]`). It is a one-shot setup call;
+  re-publishing identical bytes within a run returns the cached ref and
+  emits nothing. `_body_models` is **per-run** state (a new run must
+  re-publish, since the GLB rode in the old run's event stream).
+- **A model is ordinary content-addressed media**, so it rides in the
+  `.nebo` file, dedupes across runs, resolves by `(src_path, offset, length)`
+  into that file, and streams from a bucket in one ranged GET. The media
+  file-ref gates in `daemon.py` and `watcher.py:_read_chunk` list
+  `body_model` alongside `image`/`audio`; `_sniff_mime` maps the `glTF`
+  magic to `model/gltf-binary`. `body_model` is in `STRUCTURAL_TYPES` (a
+  pose frame without its model is unrenderable); `body_transform` is not.
+- **Node-naming contract**, `nebo/extras/robotics/gltf.py` ⇄
+  `ui/src/components/actions/sceneNodes.ts` — twin parsers, keep in lockstep
+  like `refs.py`/`refs.ts`:
+  `nebo__body__<idx>__<name>` with `nebo__geom__{visual,collision}__<n>`
+  children. The separator is `__` because three's GLTFLoader
+  (`PropertyBinding.sanitizeNodeName`) **deletes** `[ ] . : /` from every
+  node name — a colon-delimited name arrives as `nebobody1pelvis` and
+  nothing is ever posed. Body nodes export at identity and are placeholders
+  the viewer overwrites each frame; geom nodes carry fixed body-local poses.
+- **Visual/collision split**: MJCF has no explicit one, so a geom that
+  collides (`contype`/`conaffinity` nonzero) is collision geometry and one
+  that cannot is visual — MuJoCo Menagerie's classes follow exactly this.
+  Two exceptions: ground **planes** are always visual (a floor collides but
+  never has a visual twin, and hiding it empties the scene), and a model
+  with *no* visual geoms has its collision geometry promoted to visual
+  (`gltf.classify`) rather than rendering nothing.
+- Entry codes `body_model` (21) / `body_transform` (22) are **additive, with
+  no `FORMAT_VERSION` bump** — see the fileformat docstring. Daemon side:
+  `LoggableState.actions`, run-level `Run.body_models`, `actions` +
+  `body_models` cache tables, and `GET /runs/{id}/actions?limit=` with
+  per-scene **uniform stride** decimation (a scene is sampled like scatter;
+  every frame matters equally). Frames charge the RAM budget by float count,
+  and both `action_count` and action-derived `latest_step` are computed on
+  the SQL read path so a summary is identical before and after eviction.
+
+UI: `ui/src/components/actions/`. `SceneViewer.tsx` is the **only** module
+that imports `three` and is reached solely through `React.lazy`, so the
+~160 KB gzip 3D stack ships as its own chunk — never import it eagerly.
+It is handed fully-resolved instances (which GLB, where each body is, how to
+tint) and owns nothing about steps or runs; `sceneSources.ts` builds that
+list, `glbCache.ts` parses each GLB once and clones per instance (shared
+geometry, per-instance materials). Camera framing **excludes body 0** (the
+world frame holds the ground plane, which would shrink a 0.5 m arm to a
+speck) and runs once, and body-0 geometry is drawn by only the first visible
+instance and never tinted — otherwise two instances mean two coincident
+z-fighting floors. Models load asynchronously, so a `loadedVersion` counter
+re-triggers the pose/appearance effects; an in-flight load must **not** be
+cancelled by an effect-scoped flag (the effect re-runs every frame and would
+strand the claimed slot as an empty placeholder). Instance tinting is on
+when a scene has more than one instance, off for a lone model; **comparison
+views merge every run into ONE scene**, keyed `<run>·<instance>` and tinted
+by run identity, rather than a grid of viewers (browsers cap live WebGL
+contexts). Opacity / show-collision / collision-opacity / tint live in the
+global `Settings` slice and are surfaced both in the settings panels and a
+per-card popover writing the same keys. Embeds: `?actions` / `?action=NAME`.
 
 ### Image labels (`nb.labels.*`)
 
@@ -559,7 +637,7 @@ Smoothed values are rendered, not persisted: raw entries in the store remain unt
 ### Package layout
 
 - `nebo/core/` — decorators, DAG builder, session state, `DaemonClient`, config, tracker, `.nebo` file format, `groups.py` (`validate_group_path` — shared SDK/daemon group-path validation), `refs.py` (`parse_ref`/`format_ref` for canonical `nebo://` references; TS twin at `ui/src/lib/refs.ts` — keep in lockstep).
-- `nebo/logging/` — user-facing `log`/`log_line`/`log_bar`/`log_pie`/`log_scatter`/`log_histogram`/`log_image`/`log_audio`/`md`, plus the serializer/queue that batches events to the daemon, and `png.py` (pure-stdlib numpy+zlib PNG encoder — see the Pillow convention below).
+- `nebo/logging/` — user-facing `log`/`log_line`/`log_bar`/`log_pie`/`log_scatter`/`log_histogram`/`log_image`/`log_audio`/`log_body_model`/`log_body_transform`/`md`, plus the serializer/queue that batches events to the daemon, `bodies.py` (`BodyModelRef` + pose normalization for the action modality), and `png.py` (pure-stdlib numpy+zlib PNG encoder — see the Pillow convention below).
 - `nebo/labels.py` — public dataclasses (`Points`, `Boxes`, `Circles`, `Polygons`, `Bitmasks`) for `nb.log_image` overlays. Re-exported as `nb.labels`.
 - `nebo/server/` — `daemon.py` (FastAPI app, created via `create_daemon_app` factory), `workspace.py` (`--logdir` backends: writable `LocalWorkspace` / read-only `HFWorkspace`, `normalize_workspace`, `parse_hf_uri`, `read_frame_bytes` — the sole owner of what a logdir string means), `cache.py` (`RunCache` write-behind SQLite cache, `MediaLRU`, `media_id_for`, cache-path/sweep helpers), `watcher.py` (workspace watcher with persisted offsets + shallow header-only registration), `tree.py` (`TreeStore` — run-tree groups/placements/docs over `meta/tree.json`), `runner.py` (vestigial subprocess manager), `protocol.py` (`MessageType` enum + `decode_batch`).
 - `nebo/mcp/` — MCP tools (`tools.py`) and stdio/server entry points. Split into observation (graph, text, metrics, description, run summary/history — `nebo_get_text`; media reads via `nebo_list_images` + `nebo_get_image`, which returns a real MCP image content block that the stdio bridge passes through verbatim — the `_mcp_content` escape hatch in `stdio.py` — so images render inline in MCP clients; audio has no MCP read, only `nebo audio get`), alerts (`wait_for_alert`, `list_alerts`, `set_alert`, `delete_alert`), utility (`load_file`), and write (`log_metric/text/image/audio` — `nebo_log_text` entries are `{run_id?, loggable_id?, name?, message, step?}`). Run lifecycle is NOT exposed — pipelines start/stop via the user's shell.
@@ -567,8 +645,8 @@ Smoothed values are rendered, not persisted: raw entries in the store remain unt
 - `nebo/core/transport.py` — `Transport` Protocol shared by the two SDK transports. `FileTransport` (this module) writes append-only `.nebo` files in file mode; `NetworkTransport` (in `nebo/core/client.py`) POSTs events to a daemon in network mode.
 - `nebo/cli.py` — subcommands split into two groups:
   - **Server/admin:** `serve`, `cache ls|clear`, `status`, `stop`, `mcp`, `mcp-stdio`, `skills`, `deploy`. PID file at `~/.nebo/server.pid`.
-  - **Agent-callable Q&A:** `runs list|show|wait`, `graph show`, `loggables show`, `describe`, `metrics list|get|log`, `alerts ls|get|set|rm`, `text ls|log`, `images|audio log|ls|get` (`ls` lists a run's media with content-addressed media_ids; `get <media_id>` downloads one object to a file and prints the path, so agents can Read/attach it — each `get` is kind-scoped and refuses the other kind's media), `load`. Each takes `--url`/`--port`/`--api-token`/`--json` via the shared `_common_conn_parser()` and routes through `nebo/client.py`. `metrics get` supports `--values-only` (emit just the entries array; requires `--name`) and `--runs R1,R2` (client-side cross-run fan-out). There is no `nebo logs` — text reads are `nebo text ls`.
-- `nebo/extras/cv/` — optional computer-vision helpers. `nebo/extensions/` — extension hook point.
+  - **Agent-callable Q&A:** `runs list|show|wait`, `graph show`, `loggables show`, `describe`, `metrics list|get|log`, `alerts ls|get|set|rm`, `text ls|log`, `images|audio log|ls|get` (`ls` lists a run's media with content-addressed media_ids; `get <media_id>` downloads one object to a file and prints the path, so agents can Read/attach it — each `get` is kind-scoped and refuses the other kind's media), `actions ls|get` (read-only: scenes with instances/frames/step ranges, and GLB download by model_id), `load`. Each takes `--url`/`--port`/`--api-token`/`--json` via the shared `_common_conn_parser()` and routes through `nebo/client.py`. `metrics get` supports `--values-only` (emit just the entries array; requires `--name`) and `--runs R1,R2` (client-side cross-run fan-out). There is no `nebo logs` — text reads are `nebo text ls`.
+- `nebo/extras/cv/` — optional computer-vision helpers. `nebo/extras/robotics/` — optional MJCF/URDF → GLB compilation for the action modality (`compile.py` front door, `mjcf.py`, `urdf.py`, `gltf.py` scene assembly + the node-naming contract, `mj_pose` helper). `nebo/extensions/` — extension hook point.
 
 ### Web UI (`ui/`)
 
@@ -595,7 +673,8 @@ Plain `pytest` + `pytest-asyncio`. Tests are self-contained and exercise the pub
 - **No error reporting, period.** `@nb.fn()` lets exceptions propagate untouched — no error event, no excepthook. There is no `error` event type anywhere: incoming `error` wire events are silently ignored by the daemon, entry code 6 is retired in the file format, and there are no error read paths (no `/errors`, no `nebo errors`, no UI error panel). Don't reintroduce any of it.
 - **`MessageType` is the source of truth for protocol events.** Add new event kinds to `nebo/server/protocol.py` and handle them in the daemon, not ad-hoc strings.
 - **The Global loggable is always present.** `SessionState.loggables["__global__"]` is seeded on init/reset/clear. `nb.log*` calls outside any `@nb.fn()` context route there. Any code that iterates loggables and assumes node-only fields (`func_name`, `exec_count`, etc.) must filter by `isinstance(l, NodeInfo)` or `kind == "node"`.
-- **`@nb.fn(ui={})` keys.** Production code reads `color` and `default_tab`. `default_tab` values are `"info"` / `"text"` / `"metrics"` / `"images"` / `"audio"` (no `"ask"` — that tab was removed along with `nb.ask`; `"logs"` was renamed to `"text"`). Unknown keys are forwarded to the UI verbatim so adding a new hint requires only a UI consumer, no SDK change.
+- **`@nb.fn(ui={})` keys.** Production code reads `color` and `default_tab`. `default_tab` values are `"info"` / `"text"` / `"metrics"` / `"images"` / `"audio"` / `"actions"` (no `"ask"` — that tab was removed along with `nb.ask`; `"logs"` was renamed to `"text"`). Unknown keys are forwarded to the UI verbatim so adding a new hint requires only a UI consumer, no SDK change.
 - **No interactive blocking from the SDK.** `nb.ask` and pauseable nodes are intentionally absent — the SDK is for logging, not orchestration. Don't reintroduce wire-level events that block the running pipeline; if a feature needs that, it belongs outside nebo.
 - **`nb.log_image` only takes `nb.labels.*` instances.** Raw lists/tensors raise a `TypeError`. The kwarg names are `points`, `boxes`, `circles`, `polygons`, `bitmasks` (note plural for the last). Each kwarg accepts one instance or a list of them — don't reintroduce a "single raw geometry" path.
+- **The robotics extra is SDK-side only.** `mujoco`, `yourdfpy` and `trimesh` are imported lazily inside functions in `nebo/extras/robotics/`; neither `import nebo` nor the daemon may pull one in (`tests/test_import_isolation.py` enforces it). A model is compiled to GLB before it leaves the SDK, so a daemon — including the Space image — serves 3D scenes with no robotics dependency at all, and a read-only remote workspace needs no write path.
 - **Pillow and httpx are dev-only dependencies — never runtime deps.** PNGs are encoded by `nebo/logging/png.py` (stdlib + numpy); PIL *inputs* to `log_image` still work via a guarded import of the caller's own Pillow (exotic modes convert to RGB/RGBA at `prepare_image` time). All daemon-bound HTTP is stdlib (`urllib`/`http.client`); httpx exists only because `fastapi.testclient` needs it. `tests/test_png.py` + `tests/conftest.py:blocked_import` enforce both.

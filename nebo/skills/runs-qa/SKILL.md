@@ -276,6 +276,29 @@ one id. Over MCP, `nebo_get_image` returns the image directly as an
 inline image content block (no temp file needed); audio has no MCP
 read path — use the CLI download.
 
+## 3D scenes (the action modality)
+
+A run may carry 3D scenes — logged with `nb.log_body_model` /
+`nb.log_body_transform`, rendered in the UI's **Actions** tab.
+
+    nebo actions ls --run <R>
+
+lists each scene with its instance labels, frame count and step range, then
+the run's body models (name, model_id, body count, source format). To fetch
+a model's geometry:
+
+    nebo actions get <model_id> --run <R> -o /tmp/robot.glb
+
+Read-only by design: logging poses means shipping per-body transform arrays,
+which belongs in the pipeline, not a shell.
+
+**You cannot see a scene.** There is no server-side 3D renderer, so neither
+the CLI nor MCP (`nebo_list_actions`) can turn one into an image. Answer
+questions about a scene from its *metadata* (which instances exist, how many
+frames, what step range, how many bodies) and from the metrics logged
+alongside it — and say plainly that visual inspection means opening the
+Actions tab. Don't describe what a scene "looks like"; you haven't seen it.
+
 ## Multi-run Q&A
 
 For one metric across several runs, use the cross-run query directly:

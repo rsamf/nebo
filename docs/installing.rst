@@ -31,6 +31,17 @@ also install ``huggingface_hub``:
 
     pip install 'nebo[deploy]'
 
+To log 3D robot scenes with ``nb.log_body_model`` / ``nb.log_body_transform``,
+install the robotics extra — it brings MuJoCo (MJCF), yourdfpy (URDF) and
+trimesh:
+
+.. code-block:: bash
+
+    pip install 'nebo[robotics]'
+
+These are needed only where you *log* from. A nebo daemon serves 3D scenes
+without them: models are compiled to GLB before they ever leave the SDK.
+
 Agent skills
 ============
 

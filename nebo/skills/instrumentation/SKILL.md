@@ -1,6 +1,6 @@
 ---
 name: nebo-instrumentation
-description: Use when writing Python code that needs to be instrumented with nebo — adding @nb.fn() decorators, calling nb.log_text / nb.log_line / log_bar / log_pie / log_scatter / log_histogram / log_image / log_audio / log_cfg / track, declaring run-level metadata with nb.md / nb.ui. Covers ML training loops, data-processing pipelines, and agentic workflows.
+description: Use when writing Python code that needs to be instrumented with nebo — adding @nb.fn() decorators, calling nb.log_text / nb.log_line / log_bar / log_pie / log_scatter / log_histogram / log_image / log_audio / log_body_model / log_body_transform / log_cfg / track, declaring run-level metadata with nb.md / nb.ui. Covers ML training loops, data-processing pipelines, and agentic workflows.
 ---
 
 # Nebo (instrumentation)
@@ -236,6 +236,8 @@ def main():
 | `nb.log_cfg(dict)` | Configuration dict for info tab |
 | `nb.log_image(img, name=, step=)` | PIL/numpy/torch image |
 | `nb.log_audio(audio, sr=, name=, step=)` | Audio data |
+| `nb.log_body_model(name, mjcf=|urdf=)` | Publish a robot/scene once → `BodyModelRef` (needs `nebo[robotics]`) |
+| `nb.log_body_transform(name, ref, pos_quat_xyzw, step=)` | One 3D frame: per-body world poses |
 | `nb.track(iterable, name=, total=)` | Progress bar |
 | `nb.md(description)` | Workflow-level markdown |
 | `nb.ui(layout=, view=, tracker=, ...)` | Run-level UI defaults |
@@ -363,6 +365,41 @@ When the nebo daemon is running (`nebo serve`), 23 MCP tools are available for q
 3. **Inspect:** `nebo_get_graph` for DAG overview, `nebo_get_text` / `nebo_get_metrics` for detail.
 5. **Iterate:** Edit the source file directly with your normal file tools, then re-run from the shell.
 
+## 3D Robot Scenes (`nebo[robotics]`)
+
+For robotics and RL rollouts, log the scene itself. Publish the model once,
+then log where every body is on each step:
+
+```python
+import mujoco
+from nebo.extras.robotics import mj_pose
+
+@nb.fn()
+def rollout(model, data, policy):
+    arm = nb.log_body_model("arm", mjcf="arm.xml")   # once — returns a ref
+    for step in range(1000):
+        data.ctrl[:] = policy(data)
+        mujoco.mj_step(model, data)
+        nb.log_body_transform("episode", arm, mj_pose(model, data), step=step)
+```
+
+Rules that matter:
+
+- Poses are **per-body world transforms** in the model's body order
+  (`arm.body_names`), never joint angles: 7 numbers per body,
+  `[x, y, z, qx, qy, qz, qw]`. Pass `(N, 7)`, `(N, 4, 4)`, or array-like.
+- Quaternions are **xyzw** (vector-scalar). MuJoCo stores `wxyz`, so use
+  `mj_pose(model, data)` rather than passing `data.xquat` — reordering by
+  hand is the most common way to log a subtly wrong rotation.
+- `log_body_model` is a **setup call**: it compiles the model on the calling
+  thread. Call it once outside the step loop, never inside it.
+- Several bodies share one scene via a dict, exactly like `log_bar`:
+  `nb.log_body_transform("episode", arm, {"policy": p, "reference": r}, step=t)`.
+  The keys label the instances in the UI — this is how you show a policy
+  against a target pose.
+- The scene name is the card and the tracker stream; users press play in the
+  Tracker to watch the episode with metrics and text following along.
+
 ## Common Mistakes
 
 | Mistake | Fix |
@@ -375,3 +412,6 @@ When the nebo daemon is running (`nebo serve`), 23 MCP tools are available for q
 | Using `nb.init()` unnecessarily | Nebo auto-detects mode. Only call `init()` to override defaults |
 | Decorating `__init__` explicitly | `@nb.fn()` on a class already wraps all methods |
 | Logging inside tight inner loops | Log metrics per-epoch, not per-sample. Use `nb.track()` for progress |
+| Calling `nb.log_body_model()` inside the step loop | It compiles the model synchronously — call it once and reuse the ref |
+| Passing MuJoCo's `data.xquat` straight through | It is `wxyz`; nebo takes `xyzw`. Use `mj_pose(model, data)` |
+| Passing `data.qpos` to `log_body_transform` | Poses are per-body world transforms, not joint coordinates |

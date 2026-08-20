@@ -160,6 +160,63 @@ Audio
         loading="lazy">
     </iframe>
 
+3D Actions
+----------
+
+Nebo renders articulated bodies — robots, props, whole scenes — from MJCF or
+URDF. Install the extra first:
+
+.. code-block:: bash
+
+    pip install 'nebo[robotics]'
+
+Publish the model once with ``nb.log_body_model``, then log where every body
+is on each step with ``nb.log_body_transform``:
+
+.. code-block:: python
+
+    import mujoco
+    from nebo.extras.robotics import mj_pose
+
+    @nb.fn()
+    def rollout(model, data):
+        arm = nb.log_body_model("arm", mjcf="arm.xml")
+        for step in range(1000):
+            mujoco.mj_step(model, data)
+            nb.log_body_transform("episode", arm, mj_pose(model, data), step=step)
+
+Poses are **per-body world transforms** in the model's body order
+(``arm.body_names``), never joint angles — so nothing has to run forward
+kinematics to draw them. Each body takes 7 numbers,
+``[x, y, z, qx, qy, qz, qw]``; quaternions are vector-scalar (**xyzw**),
+which is the only convention nebo accepts. Pass an ``(N, 7)`` array, an
+``(N, 4, 4)`` array of homogeneous transforms, or anything array-like.
+``mj_pose`` exists because MuJoCo stores quaternions scalar-first and
+reordering them by hand is the easiest way to log a subtly wrong rotation.
+
+Several bodies can share one scene — a reference pose beside a
+policy-actuated one — by passing a dict, exactly like ``nb.log_bar``'s
+``{label: value}``. The keys name the instances and label them in the UI:
+
+.. code-block:: python
+
+    nb.log_body_transform("episode", arm, {
+        "policy": mj_pose(model, data),
+        "reference": target_poses,
+    }, step=step)
+
+Scenes appear in the **Actions** tab of the flat and DAG views, and as an
+``Actions`` modality in the Tracker. Press play in the Tracker to advance the
+shared step and watch the episode — the metrics, text and images beside it
+follow the same playhead. The card's display menu controls model opacity,
+collision-geometry visibility and its opacity, and instance tinting.
+
+.. note::
+
+    A model's visual and collision geometry are both published. Collision
+    shapes are authored for the physics engine rather than the eye, so they
+    are hidden until you turn them on.
+
 Configuration
 -------------
 

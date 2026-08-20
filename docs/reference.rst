@@ -186,6 +186,53 @@ Example::
     :param name: Optional audio clip name.
     :param step: Optional step counter.
 
+.. function:: nb.log_body_model(name: str, *, mjcf: Any = None, urdf: Any = None) -> BodyModelRef
+
+    Publish a robot or scene description for the **action** modality, and
+    return a reference to it. Requires ``pip install 'nebo[robotics]'``.
+
+    Exactly one of *mjcf* / *urdf* must be given. Each accepts a filesystem
+    path or an inline XML string; *mjcf* also accepts an already-compiled
+    ``mujoco.MjModel``, which avoids compiling the same file twice.
+
+    The description is flattened to a single self-contained GLB — visual and
+    collision geometry, one node per body — and published as ordinary
+    content-addressed media, so it rides in the ``.nebo`` file and dedupes
+    across runs.
+
+    Unlike ``log_image`` / ``log_audio`` this call is **eager**: the model is
+    compiled and hashed on the calling thread (~0.1–2 s, once) because the
+    returned reference carries its content address. Re-publishing identical
+    bytes within a run returns the cached reference and emits nothing.
+
+    :param name: Display name for the model, e.g. ``"g1"``.
+    :param mjcf: MJCF path, inline XML, or ``mujoco.MjModel``.
+    :param urdf: URDF path or inline XML.
+    :returns: A ``BodyModelRef`` whose ``body_names`` gives the body order
+        every pose array must follow.
+
+.. function:: nb.log_body_transform(name: str, model: BodyModelRef | str, pos_quat_xyzw: Any, *, step: int | None = None) -> None
+
+    Log one frame of a 3D scene: where every body of *model* currently is.
+
+    :param name: The **scene** name. Like an image or metric name it becomes
+        one card, one Tracker stream and one embed target.
+    :param model: A ``BodyModelRef`` from :func:`nb.log_body_model`, or the
+        name a model was published under in this run.
+    :param pos_quat_xyzw: Per-body **world** poses in the model's body order:
+        an ``(N, 7)`` array of ``[x, y, z, qx, qy, qz, qw]``, an ``(N, 4, 4)``
+        array of homogeneous transforms, or a ``{label: poses}`` dict placing
+        several instances in one scene (mirroring ``log_bar``'s
+        ``{label: value}``). Quaternions are vector-scalar (**xyzw**).
+    :param step: Auto-increments per ``(loggable, name)`` when omitted, exactly
+        like :func:`nb.log_line`.
+    :raises ValueError: If a pose array's body count does not match the model.
+
+.. function:: nebo.extras.robotics.mj_pose(mj_model, mj_data) -> numpy.ndarray
+
+    Convert MuJoCo state to nebo's ``(nbody, 7)`` layout, reordering each
+    quaternion from MuJoCo's scalar-first ``wxyz`` to nebo's ``xyzw``.
+
 .. function:: nb.log_cfg(cfg: dict[str, Any]) -> None
 
     Log configuration for the current node. Merges *cfg* into the node's ``params`` dict so the Info tab displays all configuration in one place.
@@ -555,7 +602,7 @@ Commands
 MCP Tools Reference
 ====================
 
-The daemon exposes 23 MCP tools split across observation, action, run-tree,
+The daemon exposes 26 MCP tools split across observation, action, run-tree,
 and write categories.
 
 Observation Tools
@@ -589,6 +636,17 @@ Observation Tools
 
 ``nebo_get_description``
     Get the workflow-level description and all node docstrings.
+
+``nebo_list_actions``
+    Summarize a run's 3D scenes: per-scene instance labels, frame counts,
+    step ranges, and the body-model manifests (body names, source format)
+    they reference. Metadata only — nebo has no server-side 3D renderer, so
+    a scene cannot be returned as an image the way ``nebo_get_image``
+    returns one.
+
+    :param run_id: The run ID (required).
+    :param loggable_id: Optional — only this loggable's scenes.
+    :param name: Optional — only this scene name.
 
 Run & Alert Tools
 -----------------

@@ -50,13 +50,15 @@ These features enable observability and the autonomous development of such appli
 * ML training
 * DAG-structured data-processing pipelines
 * Model chaining applications
+* Robotics and RL rollouts, with MJCF/URDF bodies rendered in 3D
 
 ## Features
 
 * 🏠 Local-first and free, cloud/remote-hosting optional
 * 📱 Mobile-first web UI
 * 🤖 AI-native integration with fully interoperable CLI, agent skills, and MCP
-* 📝 Captured log types: text, metrics, images, audio, md, progress
+* 📝 Captured log types: text, metrics, images, audio, 3D robot scenes, md, progress
+* 🤖 3D action modality: log MJCF/URDF bodies and per-step poses, scrub or play back the episode
 * 🎚️ Data scrubbing between time/steps
 * 🕸️ Function-level logging that automatically infers a DAG from your call graph
 * 🧩 HTML embedding with iframes of many UI components: runs, DAG nodes, charts, media

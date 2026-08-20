@@ -687,6 +687,31 @@ nebo metrics log
 
     Target run (active run if omitted).
 
+nebo actions ls / get
+=====================
+
+.. program:: nebo actions
+
+Read-only view of a run's 3D scenes. Logging poses means shipping arrays of
+per-body transforms, which belongs in the SDK rather than a shell.
+
+.. code-block:: bash
+
+    nebo actions ls --run abc123
+    nebo actions get 7f3a91c2d4e5b6a7 --run abc123 -o arm.glb
+
+``ls`` lists each scene with its instance labels, frame count and step range,
+followed by the run's body models. ``get`` downloads one model's GLB and
+prints the path, so an agent can chain into reading or attaching the file.
+
+.. option:: --run <run_id>
+
+    Target run (required).
+
+.. option:: -o, --out <path>
+
+    Output path for ``get`` (default: ``<model_id>.glb``).
+
 nebo text / images / audio log
 ==============================
 
