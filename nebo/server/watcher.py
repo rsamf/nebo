@@ -360,7 +360,10 @@ class DirectoryWatcher:
             # unregistered byte 255 ("unknown_255") with the full event
             # dict as payload, and this recovery is what ingests them.
             event = {"type": entry["type"], **entry["payload"]}
-            if event.get("type") in ("image", "audio") and "data" in event:
+            if (
+                event.get("type") in ("image", "audio", "body_model")
+                and "data" in event
+            ):
                 event["_media_src"] = (
                     uri, entry_start, entry_end - entry_start,
                 )

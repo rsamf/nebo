@@ -52,7 +52,7 @@ except ImportError:  # Windows: no flock — the single-owner guard degrades
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "7"  # v7: watch_files.token (content marker for replacements)
+SCHEMA_VERSION = "8"  # v8: actions + body_models (action modality)
 
 DEFAULT_RAM_BUDGET_MB = 384
 BYTES_PER_POINT = 372  # measured: dict-per-point daemon entry overhead
@@ -116,6 +116,19 @@ CREATE UNIQUE INDEX ux_sig_events_row ON significant_events(
   run_id, ts, type, json
 );
 CREATE TABLE media_blobs (media_id TEXT PRIMARY KEY, blob BLOB);
+CREATE TABLE body_models (
+  run_id TEXT, model_id TEXT, name TEXT, media_id TEXT,
+  body_names_json TEXT, source_format TEXT,
+  PRIMARY KEY (run_id, model_id)
+);
+CREATE TABLE actions (
+  run_id TEXT, loggable_id TEXT, name TEXT, step INTEGER, ts REAL,
+  instances_json TEXT
+);
+CREATE INDEX idx_actions ON actions(run_id, loggable_id, name, step);
+CREATE UNIQUE INDEX ux_actions_row ON actions(
+  run_id, loggable_id, name, COALESCE(step, -1), COALESCE(ts, -1)
+);
 CREATE TABLE watch_files (
   path TEXT PRIMARY KEY, run_id TEXT, offset INTEGER, size INTEGER, mtime REAL,
   shallow INTEGER NOT NULL DEFAULT 0, token TEXT
@@ -578,6 +591,28 @@ class RunCache:
                 "INSERT OR IGNORE INTO media_blobs (media_id, blob) VALUES (?, ?)",
                 (media_id, blob),
             )
+        elif kind == "action_frame":
+            _, run_id, lid, name, step, ts, instances_json = op
+            conn.execute(
+                "INSERT OR IGNORE INTO actions"
+                " (run_id, loggable_id, name, step, ts, instances_json)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (run_id, lid, name, step, ts, instances_json),
+            )
+        elif kind == "body_model_upsert":
+            (_, run_id, model_id, name, media_id, body_names_json,
+             source_format) = op
+            conn.execute(
+                "INSERT INTO body_models"
+                " (run_id, model_id, name, media_id, body_names_json,"
+                " source_format) VALUES (?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(run_id, model_id) DO UPDATE SET"
+                " name=excluded.name, media_id=excluded.media_id,"
+                " body_names_json=excluded.body_names_json,"
+                " source_format=excluded.source_format",
+                (run_id, model_id, name, media_id, body_names_json,
+                 source_format),
+            )
         elif kind == "watch_file":
             _, path, run_id, offset, size, mtime, shallow, token = op
             conn.execute(
@@ -648,6 +683,9 @@ class RunCache:
         text_count = conn.execute(
             "SELECT COUNT(*) FROM texts WHERE run_id=?", (run_id,)
         ).fetchone()[0]
+        action_count = conn.execute(
+            "SELECT COUNT(*) FROM actions WHERE run_id=?", (run_id,)
+        ).fetchone()[0]
         series = conn.execute(
             "SELECT DISTINCT loggable_id, name FROM metrics WHERE run_id=?"
             " ORDER BY loggable_id, name",
@@ -656,10 +694,15 @@ class RunCache:
         metrics_index: dict[str, list[str]] = {}
         for s in series:
             metrics_index.setdefault(s["loggable_id"], []).append(s["name"])
+        # Accumulating metrics and scene frames both advance a run's step
+        # domain in RAM, so the SQL path must consider both or a run's
+        # summary would change the moment it is evicted.
         latest_step = conn.execute(
-            "SELECT MAX(step) FROM metrics WHERE run_id=?"
-            " AND metric_type IN ('line', 'scatter')",
-            (run_id,),
+            "SELECT MAX(step) FROM ("
+            " SELECT step FROM metrics WHERE run_id=?"
+            "  AND metric_type IN ('line', 'scatter')"
+            " UNION ALL SELECT step FROM actions WHERE run_id=?)",
+            (run_id, run_id),
         ).fetchone()[0]
         edges = json.loads(row["edges_json"]) if row["edges_json"] else []
 
@@ -675,6 +718,7 @@ class RunCache:
             "node_count": node_count,
             "edge_count": len(edges),
             "text_count": text_count,
+            "action_count": action_count,
             "run_name": row["run_name"],
             "run_config": json.loads(row["run_config_json"]) if row["run_config_json"] else {},
             "metrics_index": metrics_index,
@@ -875,10 +919,15 @@ class RunCache:
             (run_id,),
         ).fetchall():
             series_types.setdefault(r["loggable_id"], {})[r["name"]] = r["metric_type"]
+        # Accumulating metrics and scene frames both advance a run's step
+        # domain in RAM, so the SQL path must consider both or a run's
+        # summary would change the moment it is evicted.
         latest_step = conn.execute(
-            "SELECT MAX(step) FROM metrics WHERE run_id=?"
-            " AND metric_type IN ('line', 'scatter')",
-            (run_id,),
+            "SELECT MAX(step) FROM ("
+            " SELECT step FROM metrics WHERE run_id=?"
+            "  AND metric_type IN ('line', 'scatter')"
+            " UNION ALL SELECT step FROM actions WHERE run_id=?)",
+            (run_id, run_id),
         ).fetchone()[0]
         counts = {
             "texts": conn.execute(
@@ -924,6 +973,60 @@ class RunCache:
                 item["sr"] = r["sr"] if r["sr"] is not None else 16000
             out.setdefault(r["loggable_id"], []).append(item)
         return out
+
+    def list_actions(
+        self,
+        run_id: str,
+        loggable_id: Optional[str] = None,
+        name: Optional[str] = None,
+    ) -> dict[str, list[dict]]:
+        """Scene frames per loggable, in step order."""
+        import json
+
+        sql = "SELECT * FROM actions WHERE run_id=?"
+        params: list = [run_id]
+        if loggable_id is not None:
+            sql += " AND loggable_id=?"
+            params.append(loggable_id)
+        if name is not None:
+            sql += " AND name=?"
+            params.append(name)
+        sql += " ORDER BY loggable_id, name, COALESCE(step, -1), ts"
+        rows = self._read_conn().execute(sql, params).fetchall()
+        out: dict[str, list[dict]] = {}
+        for r in rows:
+            out.setdefault(r["loggable_id"], []).append({
+                "loggable_id": r["loggable_id"],
+                "name": r["name"] or "",
+                "step": r["step"],
+                "timestamp": r["ts"] or 0,
+                "instances": (
+                    json.loads(r["instances_json"])
+                    if r["instances_json"] else {}
+                ),
+            })
+        return out
+
+    def list_body_models(self, run_id: str) -> dict[str, dict]:
+        """Body-model manifests for a run, keyed by content address."""
+        import json
+
+        rows = self._read_conn().execute(
+            "SELECT * FROM body_models WHERE run_id=?", (run_id,),
+        ).fetchall()
+        return {
+            r["model_id"]: {
+                "model_id": r["model_id"],
+                "name": r["name"] or "",
+                "media_id": r["media_id"],
+                "body_names": (
+                    json.loads(r["body_names_json"])
+                    if r["body_names_json"] else []
+                ),
+                "source_format": r["source_format"] or "",
+            }
+            for r in rows
+        }
 
     def get_media(self, media_id: str) -> Optional[bytes]:
         """Resolve media bytes: LRU -> blob table -> .nebo file reference."""

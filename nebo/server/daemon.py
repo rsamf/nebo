@@ -71,6 +71,8 @@ class LoggableState:
     metrics: dict[str, list] = field(default_factory=dict)
     images: list[dict] = field(default_factory=list)
     audio: list[dict] = field(default_factory=list)
+    # Action-modality scene frames: {name, step, timestamp, instances}.
+    actions: list[dict] = field(default_factory=list)
     progress: Optional[dict] = None
     group: Optional[str] = None  # Class name if this node is a method of a decorated class
     ui_hints: Optional[dict] = None  # Per-node UI display hints from @nb.fn(ui=...)
@@ -96,6 +98,10 @@ class Run:
     alerts: list[dict] = field(default_factory=list)
     run_name: Optional[str] = None
     run_config: dict = field(default_factory=dict)
+    # Body models published by nb.log_body_model, keyed by content address.
+    # Run-level rather than per-loggable: a model published from one node
+    # may be referenced by scenes logged from another.
+    body_models: dict[str, dict] = field(default_factory=dict)
     # Cache-era bookkeeping. `ram_complete` is the read-routing flag: True
     # means every entry of this run is in RAM (serve reads from RAM); False
     # means only ingest-state is resident (serve reads from the SQL cache).
@@ -167,6 +173,9 @@ class Run:
             "node_count": sum(1 for l in self.loggables.values() if l.kind == "node"),
             "edge_count": len(self.edges),
             "text_count": len(self.texts),
+            "action_count": sum(
+                len(l.actions) for l in self.loggables.values()
+            ),
             "run_name": self.run_name,
             "run_config": self.run_config,
             "metrics_index": metrics_index,
@@ -194,6 +203,38 @@ HEARTBEAT_METRIC = "last_event"
 # Cadence of the always-on heartbeat evaluator task (module-level so tests
 # can monkeypatch it down).
 HEARTBEAT_TICK_S = 1.0
+
+# Default per-scene frame cap on GET /runs/{id}/actions (`?limit=`).
+# `limit=0` returns full fidelity. A scene frame is ~1.9 KB for a 30-body
+# robot, so an uncapped 100k-step rollout would be a ~190 MB response.
+DEFAULT_ACTION_FRAMES = 2000
+
+
+def decimate_frames(frames: list[dict], limit: int) -> list[dict]:
+    """Uniformly stride a scene's frames down to `limit` (0 = no cap).
+
+    Frames arrive grouped per loggable but may span several scenes, so
+    the stride is applied per scene name — otherwise a busy scene would
+    thin a quiet one sharing the loggable. Never mutates the input.
+    """
+    if limit <= 0 or len(frames) <= limit:
+        return frames
+    by_scene: dict[str, list[dict]] = {}
+    for frame in frames:
+        by_scene.setdefault(frame.get("name", ""), []).append(frame)
+    out: list[dict] = []
+    for scene_frames in by_scene.values():
+        if len(scene_frames) <= limit:
+            out.extend(scene_frames)
+            continue
+        stride = len(scene_frames) / limit
+        picked = [scene_frames[int(i * stride)] for i in range(limit)]
+        # The final frame is the scene's current state; always keep it.
+        if picked[-1] is not scene_frames[-1]:
+            picked[-1] = scene_frames[-1]
+        out.extend(picked)
+    return out
+
 
 # Default per-series point cap on GET /runs/{id}/metrics (`?points=`).
 # `points=0` returns full fidelity — the CLI/MCP read paths go through the
@@ -264,14 +305,16 @@ _LOCAL_ONLY_ERROR = {
 
 
 def _sniff_mime(data: bytes) -> str:
-    """Content-type from magic bytes — nebo media is PNG or WAV, but agents
-    can push arbitrary files via the MCP write tools."""
+    """Content-type from magic bytes — nebo media is PNG, WAV or GLB, but
+    agents can push arbitrary files via the MCP write tools."""
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
     if data.startswith(b"\xff\xd8\xff"):
         return "image/jpeg"
     if data.startswith(b"GIF8"):
         return "image/gif"
+    if data[:4] == b"glTF":
+        return "model/gltf-binary"
     if data[:4] == b"RIFF" and data[8:12] == b"WAVE":
         return "audio/wav"
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
@@ -517,6 +560,7 @@ class DaemonState:
             lg.texts = []
             lg.images = []
             lg.audio = []
+            lg.actions = []
         run.texts = []
         run.resident_points = 0
         run.ram_complete = False
@@ -663,6 +707,46 @@ class DaemonState:
             return out
         if self.cache is not None and self.cache.has_run(run_id):
             return self.cache.list_media(run_id, kind)
+        return None
+
+    def run_actions(
+        self,
+        run_id: str,
+        loggable_id: Optional[str] = None,
+        name: Optional[str] = None,
+    ) -> Optional[dict]:
+        """Scene frames plus the run's body-model manifests.
+
+        Same read routing as every other accessor: RAM while the run is
+        resident and complete, the SQL cache otherwise.
+        """
+        run = self._resident(run_id)
+        if run is not None:
+            out: dict[str, list] = {}
+            for lid, lg in run.loggables.items():
+                if loggable_id is not None and lid != loggable_id:
+                    continue
+                frames = [
+                    {
+                        "loggable_id": lid,
+                        "name": f.get("name", ""),
+                        "step": f.get("step"),
+                        "timestamp": f.get("timestamp", 0),
+                        "instances": f.get("instances") or {},
+                    }
+                    for f in lg.actions
+                    if name is None or f.get("name", "") == name
+                ]
+                if frames:
+                    out[lid] = frames
+            return {"actions": out, "body_models": dict(run.body_models)}
+        if self.cache is not None and self.cache.has_run(run_id):
+            return {
+                "actions": self.cache.list_actions(
+                    run_id, loggable_id=loggable_id, name=name,
+                ),
+                "body_models": self.cache.list_body_models(run_id),
+            }
         return None
 
     def run_alerts(self, run_id: str) -> Optional[list[dict]]:
@@ -1088,7 +1172,7 @@ class DaemonState:
             span = writer.write_entry(entry_type, dict(event))
             if (
                 media_src is None
-                and entry_type in ("image", "audio")
+                and entry_type in ("image", "audio", "body_model")
                 and span is not None
                 and getattr(run, "_file_path", None)
             ):
@@ -1340,6 +1424,69 @@ class DaemonState:
                     media_src[0] if media_src else None,
                     media_src[1] if media_src else None,
                     media_src[2] if media_src else None,
+                ))
+
+        elif etype == "body_model":
+            if loggable_id:
+                self._ensure_loggable(run, loggable_id)
+                media_id = self._store_media(run, event, media_src)
+                model_id = event.get("model_id") or media_id
+                body_names = list(event.get("body_names") or [])
+                run.body_models[model_id] = {
+                    "model_id": model_id,
+                    "name": event.get("name", ""),
+                    "media_id": media_id,
+                    "body_names": body_names,
+                    "source_format": event.get("source_format", ""),
+                }
+                # Two rows: the media occurrence makes the GLB resolvable
+                # by (src_path, offset, length) exactly like an image, and
+                # the manifest row is what a run list reads without
+                # touching the bytes.
+                self._cache_put((
+                    "media_occurrence", run.id, loggable_id, media_id,
+                    "body_model", event.get("name", ""), None,
+                    event.get("timestamp", time.time()), None, None,
+                    media_src[0] if media_src else None,
+                    media_src[1] if media_src else None,
+                    media_src[2] if media_src else None,
+                ))
+                self._cache_put((
+                    "body_model_upsert", run.id, model_id,
+                    event.get("name", ""), media_id, json.dumps(body_names),
+                    event.get("source_format", ""),
+                ))
+
+        elif etype == "body_transform":
+            if loggable_id:
+                lg = self._ensure_loggable(run, loggable_id)
+                instances = event.get("instances") or {}
+                step = event.get("step")
+                timestamp = event.get("timestamp", time.time())
+                name = event.get("name", "")
+                lg.actions.append({
+                    "name": name,
+                    "step": step,
+                    "timestamp": timestamp,
+                    "instances": instances,
+                })
+                if step is not None:
+                    run.latest_step = (
+                        step if run.latest_step is None
+                        else max(run.latest_step, step)
+                    )
+                # A scene frame is far heavier than a metric point (a
+                # 30-body two-instance frame is ~420 floats), so charge the
+                # RAM budget by float count rather than as one point.
+                floats = sum(
+                    len(i.get("pos_quat_xyzw") or ())
+                    for i in instances.values()
+                    if isinstance(i, dict)
+                )
+                run.resident_points += max(1, (floats * 32) // 372)
+                self._cache_put((
+                    "action_frame", run.id, loggable_id, name, step,
+                    timestamp, json.dumps(instances),
                 ))
 
         elif etype == "description":
@@ -1979,6 +2126,34 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
             for lid, series_map in metrics.items()
         }}
 
+    @app.get("/runs/{run_id}/actions")
+    async def get_run_actions(
+        run_id: str,
+        loggable_id: str | None = None,
+        name: str | None = None,
+        limit: int = DEFAULT_ACTION_FRAMES,
+    ):
+        """Scene frames plus the run's body-model manifests.
+
+        Capped at ``limit`` frames per (loggable, scene) by uniform stride
+        — a scene is sampled the way scatter is, since every frame matters
+        equally and there is no spike to preserve. ``limit=0`` returns full
+        fidelity; the UI hydrates decimated-then-full exactly like metrics.
+        """
+        await state.ensure_deep(run_id)
+        payload = state.run_actions(run_id, loggable_id=loggable_id, name=name)
+        if payload is None:
+            return JSONResponse(
+                status_code=404, content={"error": f"Run '{run_id}' not found"}
+            )
+        return {
+            "actions": {
+                lid: decimate_frames(frames, limit)
+                for lid, frames in payload["actions"].items()
+            },
+            "body_models": payload["body_models"],
+        }
+
     @app.get("/runs/{run_id}/images")
     async def get_run_images(run_id: str):
         await state.ensure_deep(run_id)
@@ -2365,6 +2540,12 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
             for item in listing.get(parsed.loggable_id, []):
                 if item.get("name"):
                     names.add(item["name"])
+        actions = state.run_actions(
+            parsed.run_id, loggable_id=parsed.loggable_id,
+        ) or {"actions": {}}
+        for frame in actions["actions"].get(parsed.loggable_id, []):
+            if frame.get("name"):
+                names.add(frame["name"])
         out["exists"] = parsed.name in names
         return out
 
