@@ -2,6 +2,11 @@ import { useEffect, useRef } from 'react'
 import { useStore, type RunState, type ImageEntry, type AudioEntry } from '@/store'
 import { api, type TextEntry, type MetricEntry, type LoggableMetricSeries } from '@/lib/api'
 
+// Mirrors the daemon's DEFAULT_ACTION_FRAMES: a first response at exactly
+// this length means the scene was capped and a full-fidelity refetch is
+// worth issuing.
+const DEFAULT_ACTION_FRAMES = 2000
+
 // ─── Non-destructive hydration ────────────────────────────────────────────
 //
 // REST hydration and the live WebSocket both write the same run slices. If a
@@ -73,7 +78,7 @@ function mergeMetrics(
 }
 
 function fetchSingleRun(runId: string, store: ReturnType<typeof useStore.getState>) {
-  const { setRunGraph, setRunTexts, setRunMetrics, setRunImages, setRunAudio, setRunAlerts, setRunHydrating } = store
+  const { setRunGraph, setRunTexts, setRunMetrics, setRunImages, setRunAudio, setRunActions, setRunAlerts, setRunHydrating } = store
   setRunHydrating(runId, true)
   // Read the *current* live slice inside each `.then()` (not from the captured
   // `store` snapshot) so WS entries that landed during the fetch are merged in.
@@ -133,6 +138,21 @@ function fetchSingleRun(runId: string, store: ReturnType<typeof useStore.getStat
         mapped[nodeId] = entries.map(e => ({ node: e.node, mediaId: e.media_id, name: e.name, sr: e.sr, step: e.step, timestamp: e.timestamp }))
       }
       setRunAudio(runId, mergeByMediaId(mapped, current()?.loggableAudio ?? {}))
+    }),
+    // Two-phase action hydration, mirroring metrics: the daemon's
+    // per-scene frame cap paints the scene immediately, then a
+    // `limit: 0` fetch replaces the frames with every one of them so
+    // playback is smooth rather than strided. The second fetch only
+    // runs when the first was actually capped.
+    api.getRunActions(runId).then(d => {
+      setRunActions(runId, d.actions, d.body_models)
+      const capped = Object.values(d.actions).some(
+        frames => frames.length >= DEFAULT_ACTION_FRAMES,
+      )
+      if (!capped) return
+      return api.getRunActions(runId, { limit: 0 }).then(full =>
+        setRunActions(runId, full.actions, full.body_models, true),
+      )
     }),
     // setRunAlerts merges non-destructively itself (keyed dedupe against
     // WS-appended entries), matching the other slices' merge semantics.

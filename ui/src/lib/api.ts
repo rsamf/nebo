@@ -169,6 +169,38 @@ export interface LabelsPayload {
   bitmasks?: LabelGroup<BitmaskEntry[]>[]
 }
 
+// --- Action modality (3D scenes) ------------------------------------------
+//
+// One instance inside a scene: which body model it is, and where every one
+// of that model's bodies currently is. `pos_quat_xyzw` is FLAT — 7 floats
+// per body ([x, y, z, qx, qy, qz, qw]) in the model's body order, so body
+// `i` reads `slice(i * 7, i * 7 + 7)`. Quaternions are vector-scalar
+// (xyzw), the sole convention nebo accepts.
+export interface ActionInstance {
+  model: string
+  pos_quat_xyzw: number[]
+}
+
+// One frame of a scene: every instance's pose at one step.
+export interface ActionFrame {
+  loggable_id?: string
+  node: string
+  name: string
+  step: number | null
+  timestamp: number
+  instances: Record<string, ActionInstance>
+}
+
+// A compiled body model. `media_id` fetches its GLB from the media
+// endpoint; `body_names` is the order every pose array follows.
+export interface BodyModelManifest {
+  model_id: string
+  name: string
+  media_id: string
+  body_names: string[]
+  source_format: 'mjcf' | 'urdf' | string
+}
+
 // A fired alert on a run: code-fired (`nb.alert`, triggered_by "code") or
 // rule-fired (CLI/MCP condition rules, triggered_by "cli").
 export interface AlertEntry {
@@ -237,6 +269,14 @@ export const api = {
       `/runs/${id}/metrics${opts?.points != null ? `?points=${opts.points}` : ''}`,
     ),
   getRunImages: (id: string) => get<{ images: Record<string, Array<{ node: string; media_id: string; name: string; step: number | null; timestamp: number; labels?: LabelsPayload | null }>> }>(`/runs/${id}/images`),
+  // Scene frames are capped per scene by the daemon (uniform stride);
+  // `limit: 0` asks for full fidelity, which the UI fetches as a second
+  // phase exactly like metrics.
+  getRunActions: (id: string, opts?: { limit?: number }) =>
+    get<{
+      actions: Record<string, ActionFrame[]>
+      body_models: Record<string, BodyModelManifest>
+    }>(`/runs/${id}/actions${opts?.limit != null ? `?limit=${opts.limit}` : ''}`),
   getRunAudio: (id: string) => get<{ audio: Record<string, Array<{ node: string; media_id: string; name: string; sr: number; step: number | null; timestamp: number }>> }>(`/runs/${id}/audio`),
   getRunAlerts: (id: string) => get<{ alerts: AlertEntry[] }>(`/runs/${id}/alerts`),
   // Media is served as raw immutable bytes (ETag = content-addressed

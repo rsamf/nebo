@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { RunSummary, GraphData, TextEntry, LabelsPayload, MetricType, MetricEntry, LoggableMetricSeries, TreeData, AlertEntry } from '@/lib/api'
+import type { RunSummary, GraphData, TextEntry, LabelsPayload, MetricType, MetricEntry, LoggableMetricSeries, TreeData, AlertEntry, ActionFrame, BodyModelManifest } from '@/lib/api'
 import { EMPTY_TREE, parseNeboLink } from '@/lib/api'
 import type { WsEvent } from '@/lib/ws'
 import { assignColor } from '@/lib/colors'
@@ -79,7 +79,7 @@ const initialSettings = loadSettings()
 // Apply persisted theme on load
 document.documentElement.classList.toggle('dark', initialSettings.theme === 'dark')
 
-export type NodeTab = 'text' | 'metrics' | 'images' | 'audio'
+export type NodeTab = 'text' | 'metrics' | 'images' | 'audio' | 'actions'
 
 export interface ImageEntry {
   node: string
@@ -143,6 +143,11 @@ export interface RunState {
   loggableMetrics: Record<string, Record<string, LoggableMetricSeries>>
   loggableImages: Record<string, ImageEntry[]>
   loggableAudio: Record<string, AudioEntry[]>
+  // Action modality: scene frames per loggable, plus the run-level body
+  // models they reference. Models are run-scoped, not per-loggable — one
+  // node can publish a model that another node's scene renders.
+  loggableActions: Record<string, ActionFrame[]>
+  bodyModels: Record<string, BodyModelManifest>
   // Fired alerts. Hydrated lazily (the mobile alerts sheet fetches on
   // open via setRunAlerts) and appended live from WS `alert` events.
   alerts: AlertEntry[]
@@ -287,6 +292,7 @@ interface NeboStore {
   setRunMetrics: (runId: string, metrics: Record<string, Record<string, LoggableMetricSeries>>) => void
   setRunImages: (runId: string, images: Record<string, ImageEntry[]>) => void
   setRunAudio: (runId: string, audio: Record<string, AudioEntry[]>) => void
+  setRunActions: (runId: string, actions: Record<string, ActionFrame[]>, bodyModels: Record<string, BodyModelManifest>, replace?: boolean) => void
   setRunAlerts: (runId: string, alerts: AlertEntry[]) => void
   appendMetric: (runId: string, loggableId: string, name: string, entry: MetricEntry, type: MetricType) => void
   updateNodeProgress: (runId: string, nodeId: string, progress: { current: number; total: number; name?: string } | null) => void
@@ -551,6 +557,8 @@ export const useStore = create<NeboStore>((set, get) => ({
           loggableMetrics: {},
           loggableImages: {},
           loggableAudio: {},
+          loggableActions: {},
+          bodyModels: {},
           alerts: [],
           loaded: false,
           globalLoggable: undefined,
@@ -681,6 +689,38 @@ export const useStore = create<NeboStore>((set, get) => ({
       }
       runs.set(runId, { ...run, loggableAudio: merged })
     }
+    return { runs }
+  }),
+
+  // Scene frames arrive twice: a decimated first paint, then the full
+  // series (`replace`), matching how metrics hydrate. Merging by
+  // (name, step, timestamp) keeps live WS frames that landed between the
+  // two fetches instead of dropping them on the replace.
+  setRunActions: (runId, actions, bodyModels, replace = false) => set(state => {
+    const runs = new Map(state.runs)
+    const run = runs.get(runId)
+    if (!run) return { runs }
+    const merged: Record<string, ActionFrame[]> = replace
+      ? {}
+      : { ...run.loggableActions }
+    const key = (f: ActionFrame) => `${f.name}|${f.step}|${f.timestamp}`
+    for (const [loggableId, frames] of Object.entries(actions)) {
+      const existing = replace
+        ? (run.loggableActions[loggableId] ?? [])
+        : (merged[loggableId] ?? [])
+      const incoming = new Set(frames.map(key))
+      const kept = existing.filter(f => !incoming.has(key(f)))
+      merged[loggableId] = replace
+        ? [...frames, ...kept].sort(
+            (a, b) => (a.step ?? 0) - (b.step ?? 0) || a.timestamp - b.timestamp,
+          )
+        : [...existing, ...frames.filter(f => !new Set(existing.map(key)).has(key(f)))]
+    }
+    runs.set(runId, {
+      ...run,
+      loggableActions: merged,
+      bodyModels: { ...run.bodyModels, ...bodyModels },
+    })
     return { runs }
   }),
 
@@ -846,6 +886,8 @@ export const useStore = create<NeboStore>((set, get) => ({
           loggableMetrics: {},
           loggableImages: {},
           loggableAudio: {},
+          loggableActions: {},
+          bodyModels: {},
           alerts: [],
           loaded: false,
           globalLoggable: undefined,
@@ -1089,6 +1131,35 @@ export const useStore = create<NeboStore>((set, get) => ({
                 sr: (ev.sr as number) ?? 16000,
                 step: (ev.step as number) ?? null,
                 timestamp: (ev.timestamp as number) ?? Date.now() / 1000,
+              }] }
+            }
+            break
+
+          case 'body_model': {
+            const ev = event as Record<string, unknown>
+            const modelId = (ev.model_id as string) ?? ''
+            if (modelId) {
+              run.bodyModels = { ...run.bodyModels, [modelId]: {
+                model_id: modelId,
+                name: (ev.name as string) ?? '',
+                media_id: (ev.media_id as string) ?? '',
+                body_names: (ev.body_names as string[]) ?? [],
+                source_format: (ev.source_format as string) ?? '',
+              } }
+            }
+            break
+          }
+
+          case 'body_transform':
+            if (loggableId) {
+              const ev = event as Record<string, unknown>
+              const prev = run.loggableActions[loggableId] ?? []
+              run.loggableActions = { ...run.loggableActions, [loggableId]: [...prev, {
+                node: loggableId,
+                name: (ev.name as string) ?? '',
+                step: (ev.step as number) ?? null,
+                timestamp: (ev.timestamp as number) ?? Date.now() / 1000,
+                instances: (ev.instances as ActionFrame['instances']) ?? {},
               }] }
             }
             break
