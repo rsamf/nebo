@@ -94,14 +94,6 @@ class TestActionIngest:
         _ingest(self.state, "r1", [_frame_event(0), _frame_event(1)])
         assert self.run.get_summary()["action_count"] == 2
 
-    def test_demoting_a_run_drops_action_frames(self):
-        _ingest(self.state, "r1", [_frame_event(0)])
-        self.run.ram_complete = True
-        # No cache on a bare DaemonState, so demote via the same field path
-        # the janitor uses.
-        for lg in self.run.loggables.values():
-            lg.actions = []
-        assert self.run.loggables["__global__"].actions == []
 
 
 def test_gltf_bytes_sniff_as_gltf_binary():
@@ -246,6 +238,20 @@ class TestActionCache:
             assert models["abc123"]["name"] == "renamed"
         finally:
             cache.close()
+
+    def test_demotion_drops_read_state_but_keeps_serving(self, tmp_path):
+        """A demoted run drops its RAM frames and reads them back from SQL."""
+        state = DaemonState(cache=self._cache(tmp_path))
+        try:
+            state.create_run("sim.py", run_id="r1")
+            _ingest(state, "r1", [_model_event(), _frame_event(0)])
+            state._demote_run("r1")
+            assert state.runs["r1"].loggables["__global__"].actions == []
+            assert state.runs["r1"].ram_complete is False
+            # Ingest state survives, so reads fall through to the cache.
+            assert len(state.run_actions("r1")["actions"]["__global__"]) == 1
+        finally:
+            state.cache.close()
 
     def test_frames_read_back_after_eviction(self, tmp_path):
         """A run served from SQL still lists its scenes and models."""

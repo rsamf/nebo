@@ -19,11 +19,7 @@ def stub_compile(monkeypatch):
     Keeps the SDK tests fast and independent of the robotics extra; the
     real compilation path is covered by tests/test_robotics_compile.py.
     """
-    def _compile(*, mjcf=None, urdf=None, _n=[0]):
-        if (mjcf is None) == (urdf is None):
-            raise TypeError(
-                "log_body_model() requires exactly one of mjcf= or urdf="
-            )
+    def _compile(*, mjcf=None, urdf=None):
         return CompiledModel(
             glb=FAKE_GLB, body_names=("world", "link1"),
             source_format="mjcf" if mjcf is not None else "urdf",
@@ -120,13 +116,6 @@ def test_republishing_identical_bytes_emits_once(
     second = nb.log_body_model("arm", mjcf="<mujoco/>")
     assert first is second
     assert len(capturing_client.by_type("body_model")) == 1
-
-
-def test_log_body_model_requires_exactly_one_source(
-    capturing_client, stub_compile,
-):
-    with pytest.raises(TypeError, match="exactly one of mjcf= or urdf="):
-        nb.log_body_model("arm")
 
 
 # --- log_body_transform ----------------------------------------------------
