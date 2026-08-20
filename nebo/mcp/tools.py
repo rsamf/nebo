@@ -58,6 +58,59 @@ async def list_images(run_id: str, server_url: str = _DEFAULT_URL) -> dict[str, 
         return _daemon_unreachable(server_url, e)
 
 
+async def list_actions(
+    run_id: str,
+    loggable_id: Optional[str] = None,
+    name: Optional[str] = None,
+    server_url: str = _DEFAULT_URL,
+) -> dict[str, Any]:
+    """Summarize a run's 3D scenes and the body models they reference.
+
+    Metadata only. There is no server-side renderer, so a scene cannot be
+    turned into an image the way nebo_get_image returns one — this
+    reports what exists (scenes, instances, frame counts, step ranges,
+    model manifests) so the shape of a run's action data is discoverable.
+    """
+    try:
+        result = _client.list_actions(
+            run_id, loggable_id=loggable_id, name=name, limit=0,
+            url=server_url,
+        )
+    except Exception as e:
+        return _daemon_unreachable(server_url, e)
+
+    scenes: dict[str, dict[str, Any]] = {}
+    for lid, frames in (result.get("actions") or {}).items():
+        for frame in frames:
+            key = f"{lid}/{frame.get('name', '')}"
+            scene = scenes.setdefault(key, {
+                "loggable_id": lid,
+                "name": frame.get("name", ""),
+                "instances": [],
+                "models": [],
+                "frames": 0,
+                "steps": [None, None],
+            })
+            scene["frames"] += 1
+            for label, inst in (frame.get("instances") or {}).items():
+                if label not in scene["instances"]:
+                    scene["instances"].append(label)
+                model = (inst or {}).get("model")
+                if model and model not in scene["models"]:
+                    scene["models"].append(model)
+            step = frame.get("step")
+            if step is not None:
+                lo, hi = scene["steps"]
+                scene["steps"] = [
+                    step if lo is None else min(lo, step),
+                    step if hi is None else max(hi, step),
+                ]
+    return {
+        "scenes": list(scenes.values()),
+        "body_models": result.get("body_models") or {},
+    }
+
+
 async def get_image(run_id: str, media_id: str, server_url: str = _DEFAULT_URL) -> dict[str, Any]:
     """Fetch one image as an MCP image content block.
 

@@ -1058,6 +1058,97 @@ def _cmd_media_get(args: argparse.Namespace, kind: str) -> None:
         print(out.resolve())
 
 
+def cmd_actions(args: argparse.Namespace) -> None:
+    """Route `nebo actions <action>`: `ls` lists scenes, `get` downloads a model."""
+    if args.actions_action == "get":
+        _cmd_actions_get(args)
+    else:
+        _cmd_actions_ls(args)
+
+
+def _cmd_actions_ls(args: argparse.Namespace) -> None:
+    """List a run's 3D scenes and the body models they reference.
+
+    Read-only by design: logging poses means shipping arrays of per-body
+    transforms, which is a job for the SDK, not a shell.
+    """
+    from nebo import client
+
+    result = client.list_actions(
+        args.run, limit=0, **_conn_kwargs(args)
+    )
+    if args.json:
+        print(json.dumps(result))
+        return
+
+    scenes: dict[tuple[str, str], dict] = {}
+    for lid, frames in (result.get("actions") or {}).items():
+        for frame in frames:
+            key = (lid, frame.get("name", ""))
+            scene = scenes.setdefault(
+                key, {"frames": 0, "instances": set(), "steps": []}
+            )
+            scene["frames"] += 1
+            scene["instances"].update(frame.get("instances") or {})
+            if frame.get("step") is not None:
+                scene["steps"].append(frame["step"])
+
+    if not scenes:
+        print("No action scenes found.")
+    else:
+        print(f"{'SCENE':<28} {'INSTANCES':<28} {'FRAMES':>7}  STEPS")
+        for (lid, name), scene in sorted(scenes.items()):
+            steps = scene["steps"]
+            span = f"{min(steps)}-{max(steps)}" if steps else "-"
+            print(
+                f"  [{lid}] {name}"[:28].ljust(28) + " "
+                + ",".join(sorted(scene["instances"]))[:28].ljust(28) + " "
+                + f"{scene['frames']:>7}  {span}"
+            )
+
+    models = result.get("body_models") or {}
+    if models:
+        print("\nMODELS")
+        for model_id, m in sorted(models.items()):
+            print(
+                f"  {m.get('name', '')}  model_id={model_id}  "
+                f"{len(m.get('body_names') or [])} bodies  "
+                f"{m.get('source_format', '')}  "
+                f"media_id={m.get('media_id', '')}"
+            )
+
+
+def _cmd_actions_get(args: argparse.Namespace) -> None:
+    """Download one body model's GLB and print its path."""
+    from nebo import client
+
+    conn = _conn_kwargs(args)
+    result = client.list_actions(args.run, limit=1, **conn)
+    models = result.get("body_models") or {}
+    model = models.get(args.model_id)
+    if model is None:
+        known = ", ".join(sorted(models)) or "none"
+        print(
+            f"no body model '{args.model_id}' in run '{args.run}' "
+            f"(known: {known})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    data, ctype = client.get_media(args.run, model["media_id"], **conn)
+    out = Path(args.out or f"{args.model_id}.glb")
+    out.write_bytes(data)
+    if args.json:
+        print(json.dumps({
+            "path": str(out),
+            "content_type": ctype.split(";")[0].strip(),
+            "bytes": len(data),
+            "body_names": model.get("body_names") or [],
+        }))
+    else:
+        print(out.resolve())
+
+
 def _lazy_deploy(args: argparse.Namespace) -> None:
     """Defer the huggingface_hub import — it's an optional dependency."""
     from nebo.cli_deploy import cmd_deploy
@@ -1584,6 +1675,26 @@ def main() -> None:
             help="Output path (default: <media_id> + extension from content type)",
         )
 
+    # actions: read-only view of the 3D scene modality
+    p_actions = subparsers.add_parser(
+        "actions", help="List a run's 3D scenes and body models",
+    )
+    actions_sub = p_actions.add_subparsers(dest="actions_action", required=True)
+    p_actions_ls = actions_sub.add_parser(
+        "ls", parents=[_common_conn_parser()],
+        help="List a run's action scenes, instances and body models",
+    )
+    p_actions_ls.add_argument("--run", required=True, help="Run ID")
+    p_actions_get = actions_sub.add_parser(
+        "get", parents=[_common_conn_parser()],
+        help="Download one body model's GLB (id from `actions ls`) to a file",
+    )
+    p_actions_get.add_argument("model_id", help="Body model id from `actions ls`")
+    p_actions_get.add_argument("--run", required=True, help="Run ID")
+    p_actions_get.add_argument(
+        "-o", "--out", help="Output path (default: <model_id>.glb)",
+    )
+
     # deploy
     p_deploy = subparsers.add_parser(
         "deploy",
@@ -1627,6 +1738,7 @@ def main() -> None:
         "metrics": cmd_metrics,
         "text": cmd_text,
         "images": cmd_images,
+        "actions": cmd_actions,
         "audio": cmd_audio,
     }
 

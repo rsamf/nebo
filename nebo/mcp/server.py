@@ -98,6 +98,25 @@ MCP_TOOLS = [
             "required": ["run_id", "media_id"],
         },
     },
+    {
+        "name": "nebo_list_actions",
+        "description": (
+            "List a run's 3D action scenes: per-scene instance labels, "
+            "frame counts, step ranges, and the body-model manifests "
+            "(body names, source format) they reference. Metadata only — "
+            "nebo has no server-side 3D renderer, so a scene cannot be "
+            "returned as an image."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "run_id": {"type": "string", "description": "The run ID."},
+                "loggable_id": {"type": "string", "description": "Optional: only this loggable's scenes."},
+                "name": {"type": "string", "description": "Optional: only this scene name."},
+            },
+            "required": ["run_id"],
+        },
+    },
     # ── Action Tools ──
     {
         "name": "nebo_get_run_status",
@@ -407,6 +426,9 @@ async def handle_tool_call(name: str, arguments: dict[str, Any], server_url: str
         "nebo_get_metrics": lambda a: tools.get_metrics(a["loggable_id"], a.get("name"), server_url),
         "nebo_get_description": lambda a: tools.get_description(server_url),
         "nebo_list_images": lambda a: tools.list_images(a["run_id"], server_url),
+        "nebo_list_actions": lambda a: tools.list_actions(
+            a["run_id"], a.get("loggable_id"), a.get("name"), server_url,
+        ),
         "nebo_get_image": lambda a: tools.get_image(a["run_id"], a["media_id"], server_url),
         # Action
         "nebo_get_run_status": lambda a: tools.get_run_status(a["run_id"], server_url),

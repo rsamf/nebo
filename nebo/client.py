@@ -181,6 +181,32 @@ def list_audio(run_id: str, **conn) -> Any:
     return _get(f"/runs/{urllib.parse.quote(run_id)}/audio", **conn)
 
 
+def list_actions(
+    run_id: str,
+    loggable_id: Optional[str] = None,
+    name: Optional[str] = None,
+    limit: Optional[int] = None,
+    **conn,
+) -> Any:
+    """List a run's 3D scenes and the body models they reference.
+
+    Returns ``{"actions": {loggable_id: [frame, ...]},
+    "body_models": {model_id: manifest}}``. ``limit=0`` asks the daemon
+    for full fidelity instead of the default per-scene frame cap.
+    """
+    params: dict[str, Any] = {}
+    if loggable_id is not None:
+        params["loggable_id"] = loggable_id
+    if name is not None:
+        params["name"] = name
+    if limit is not None:
+        params["limit"] = limit
+    query = f"?{urllib.parse.urlencode(params)}" if params else ""
+    return _get(
+        f"/runs/{urllib.parse.quote(run_id)}/actions{query}", **conn
+    )
+
+
 def get_media(
     run_id: str,
     media_id: str,
