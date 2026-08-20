@@ -30,6 +30,10 @@ Issues = "https://github.com/rsamf/nebo/issues"
 
 [project.optional-dependencies]
 deploy = ["huggingface_hub>=0.20.0"]
+# Robotics: MJCF/URDF -> GLB compilation for the action modality. SDK-side
+# only -- the daemon and the UI never import these (tests/conftest.py's
+# blocked_import guard enforces it), so a nebo server stays lightweight.
+robotics = ["mujoco>=3.1", "yourdfpy>=0.0.56", "trimesh>=4.0"]
 
 # PEP 735 dependency-groups. `uv sync --all-groups` syncs all groups
 # listed here but does NOT touch [project.optional-dependencies], so the
@@ -58,6 +62,7 @@ dev = [
     "webdriver-manager>=4.0.2",
 ]
 deploy = ["huggingface_hub>=0.20.0"]
+robotics = ["mujoco>=3.1", "yourdfpy>=0.0.56", "trimesh>=4.0"]
 
 [project.scripts]
 nebo = "nebo.cli:main"
