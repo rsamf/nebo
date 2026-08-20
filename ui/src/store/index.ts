@@ -147,6 +147,12 @@ export interface TimelineState {
   // playhead does; see usePlayback.
   playing: boolean
   fps: number
+  // Step the media panels are pinned to while playing. Every logged image
+  // is a separate HTTP fetch, so following a 30 fps playhead would issue
+  // 30 requests a second per image panel and show nothing but spinners.
+  // Media therefore holds the step playback started from and catches up
+  // when it stops. Prefetch/buffering is deliberately deferred.
+  playbackFrom: number | null
 }
 
 export interface ComparisonGroup {
@@ -476,7 +482,7 @@ export const useStore = create<NeboStore>((set, get) => ({
 
   timeline: {
     mode: 'time', step: null, time: null, selectedStream: null,
-    playing: false, fps: 30,
+    playing: false, fps: 30, playbackFrom: null,
   },
   setTimelineMode: (mode) => set(state => ({ timeline: { ...state.timeline, mode } })),
   setTimelineStep: (step) => set(state => ({ timeline: { ...state.timeline, step } })),
@@ -488,6 +494,7 @@ export const useStore = create<NeboStore>((set, get) => ({
       ...state.timeline,
       playing,
       mode: playing ? 'step' : state.timeline.mode,
+      playbackFrom: playing ? state.timeline.step : null,
     },
   })),
   setFps: (fps) => set(state => ({

@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { ImageIcon, LineChart as LineIcon, BarChart3, ScatterChart } from 'lucide-react'
+import { ImageIcon, LineChart as LineIcon, BarChart3, ScatterChart, Boxes } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { useStore, type Settings as SettingsType } from '@/store'
 import { useComparisonContext } from '@/hooks/useComparisonContext'
@@ -144,6 +144,51 @@ export function RightPanelSettings() {
             step={1}
             onChange={(v) => updateSetting<keyof SettingsType>('histogramBinCount', v)}
           />
+        </div>
+      </section>
+
+      <section>
+        <div className="flex items-center gap-2 mb-3">
+          <Boxes className="h-4 w-4 text-muted-foreground" />
+          <h3 className="text-sm font-medium">3D scenes</h3>
+        </div>
+        <div className="space-y-3">
+          <ChartSlider
+            label="Model opacity"
+            value={settings.bodyOpacity}
+            min={0}
+            max={1}
+            step={0.05}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onChange={(v) => updateSetting<keyof SettingsType>('bodyOpacity', v)}
+          />
+          <label className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">Show collision geometry</span>
+            <input
+              type="checkbox"
+              className="accent-primary"
+              checked={settings.showCollision}
+              onChange={(e) => updateSetting<keyof SettingsType>('showCollision', e.target.checked)}
+            />
+          </label>
+          <ChartSlider
+            label="Collision opacity"
+            value={settings.collisionOpacity}
+            min={0}
+            max={1}
+            step={0.05}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onChange={(v) => updateSetting<keyof SettingsType>('collisionOpacity', v)}
+          />
+          <label className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">Tint instances</span>
+            <input
+              type="checkbox"
+              className="accent-primary"
+              checked={settings.tintInstances}
+              onChange={(e) => updateSetting<keyof SettingsType>('tintInstances', e.target.checked)}
+            />
+          </label>
         </div>
       </section>
 

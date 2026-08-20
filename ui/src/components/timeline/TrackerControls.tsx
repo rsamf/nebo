@@ -1,16 +1,17 @@
 import { useCallback, useEffect } from 'react'
 import { useStore } from '@/store'
 import { useIsDesktop } from '@/hooks/useMediaQuery'
+import { usePlayback } from '@/hooks/usePlayback'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
-import { ChevronLeft, ChevronRight, Maximize, ChevronDown, ChevronUp, SlidersHorizontal } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Maximize, ChevronDown, ChevronUp, SlidersHorizontal, Play, Pause } from 'lucide-react'
 import { MODALITY_COLORS, STREAM_MODALITIES, type StreamModality } from '@/lib/streams'
 
 const MODALITY_LABELS: Record<StreamModality, string> = {
-  text: 'Text', image: 'Images', audio: 'Audio',
+  text: 'Text', image: 'Images', audio: 'Audio', action: 'Actions',
 }
 const MODALITIES = STREAM_MODALITIES
 
@@ -60,8 +61,14 @@ export function TrackerControls({ minStep, maxStep, hasSteps, activeModalities, 
   const timeline = useStore(s => s.timeline)
   const setMode = useStore(s => s.setTimelineMode)
   const setStep = useStore(s => s.setTimelineStep)
+  const setPlaying = useStore(s => s.setPlaying)
+  const setFps = useStore(s => s.setFps)
   const isStep = timeline.mode === 'step'
   const isDesktop = useIsDesktop()
+
+  // Playback owns the shared playhead; the tracker is where it belongs
+  // since every panel follows that playhead.
+  usePlayback(minStep, maxStep, hasSteps)
 
   const stepBy = useCallback((d: number) => {
     if (!hasSteps) return
@@ -131,14 +138,36 @@ export function TrackerControls({ minStep, maxStep, hasSteps, activeModalities, 
         </Popover>
       )}
 
-      {/* Step navigation stays in the bar on both layouts. */}
+      {/* Step navigation + playback stay in the bar on both layouts. */}
       <div className="flex items-center gap-0.5">
         <Button variant="ghost" className="h-7 w-7 p-0" disabled={!hasSteps} title="Previous step" onClick={() => stepBy(-1)}>
           <ChevronLeft size={15} />
         </Button>
+        <Button
+          variant="ghost"
+          className="h-7 w-7 p-0"
+          disabled={!hasSteps}
+          title={timeline.playing ? 'Pause' : 'Play through steps'}
+          onClick={() => setPlaying(!timeline.playing)}
+        >
+          {timeline.playing ? <Pause size={15} /> : <Play size={15} />}
+        </Button>
         <Button variant="ghost" className="h-7 w-7 p-0" disabled={!hasSteps} title="Next step" onClick={() => stepBy(1)}>
           <ChevronRight size={15} />
         </Button>
+      </div>
+
+      <div className="flex items-center gap-1" title="Playback rate (steps per second)">
+        <Input
+          type="number"
+          className="h-7 w-14"
+          value={timeline.fps}
+          min={1}
+          max={240}
+          disabled={!hasSteps}
+          onChange={e => setFps(Number(e.target.value))}
+        />
+        <span className="text-[10px] text-muted-foreground">fps</span>
       </div>
 
       {isStep && (

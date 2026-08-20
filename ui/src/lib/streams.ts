@@ -2,10 +2,14 @@
 // A "stream" is a named series of datapoints within one loggable. Its full
 // path is /<prefix>/<name> where prefix is the function name (nodes),
 // "agent" (the __agent__ loggable), or "" (global, root-level).
+//
+// Metrics are deliberately absent from the stream tree; an action scene is
+// present because each of its frames is a datapoint at a step, exactly like
+// an image.
 
-export type StreamModality = 'text' | 'image' | 'audio'
+export type StreamModality = 'text' | 'image' | 'audio' | 'action'
 
-export const STREAM_MODALITIES: StreamModality[] = ['text', 'image', 'audio']
+export const STREAM_MODALITIES: StreamModality[] = ['text', 'image', 'audio', 'action']
 
 // Single source of the per-modality accent color — the desktop tracker
 // (chips + dot rows) and the mobile tracker sheet must agree.
@@ -13,6 +17,7 @@ export const MODALITY_COLORS: Record<StreamModality, string> = {
   text: '#3b82f6',
   image: '#22c55e',
   audio: '#f97316',
+  action: '#a855f7',
 }
 
 export interface StreamDatapoint {

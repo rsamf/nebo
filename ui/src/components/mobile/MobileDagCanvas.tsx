@@ -59,7 +59,13 @@ export function MobileDagCanvas({
   const runColor = useStore(s => s.runColors.get(runId)) ?? DEFAULT_RUN_COLOR
   // Image/audio previews follow the playhead (null reads as step 0), so
   // scrubbing the tracker pages the DAG's media through the run.
-  const timelineStep = useStore(s => s.timeline.step)
+  // Node previews are media thumbnails — one fetch each — so like the
+  // media panels they pin to where playback started rather than chasing
+  // a 30 fps playhead. See useTimelineFilter.
+  const playing = useStore(s => s.timeline.playing)
+  const playbackFrom = useStore(s => s.timeline.playbackFrom)
+  const liveStep = useStore(s => s.timeline.step)
+  const timelineStep = playing ? playbackFrom : liveStep
   const graph = run?.graph
   const loggableMetrics = run?.loggableMetrics
 

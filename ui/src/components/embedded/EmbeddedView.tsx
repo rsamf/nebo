@@ -13,6 +13,7 @@ import { LoggableTabContainer } from '@/components/node-tabs/LoggableTabContaine
 import { MetricBlock } from '@/components/node-tabs/NodeMetrics'
 import { ImageItem } from '@/components/node-tabs/NodeImages'
 import { AudioItem } from '@/components/node-tabs/NodeAudio'
+import { ActionCard } from '@/components/actions/ActionCard'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { ConfigChips } from '@/components/shared/ConfigChips'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -74,6 +75,9 @@ export function EmbeddedView({ spec }: { spec: EmbeddedSpec }) {
     case 'audios':
     case 'audio':
       return <EmbeddedAudio spec={spec} />
+    case 'actions':
+    case 'action':
+      return <EmbeddedActions spec={spec} />
   }
 }
 
@@ -277,6 +281,69 @@ function EmbeddedImages({ spec }: { spec: EmbeddedSpec }) {
             <ImageItem key={mediaEntryKey(img, i)} runId={spec.runId} loggableId={loggableId} img={img} showTimestamp />
           ))
         )}
+      </div>
+    </ScrollArea>
+  )
+}
+
+// Unlike the media galleries, a scene is ONE live viewport regardless of
+// how many frames were logged — frames are steps of the same card, not
+// separate items — so there is nothing to cap here.
+function EmbeddedActions({ spec }: { spec: EmbeddedSpec }) {
+  const allActions = useStore(s => s.runs.get(spec.runId)?.loggableActions)
+  const graph = useStore(s => s.runs.get(spec.runId)?.graph)
+  const filterNodeId = resolveNodeRef(spec.nodeRef, graph?.nodes)
+
+  const scenes = useMemo(() => {
+    const out: { loggableId: string; name: string }[] = []
+    const seen = new Set<string>()
+    for (const [lid, frames] of Object.entries(allActions ?? {})) {
+      if (filterNodeId && lid !== filterNodeId) continue
+      for (const frame of frames) {
+        const name = frame.name || 'scene'
+        if (spec.name && name !== spec.name) continue
+        const key = `${lid}:${name}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push({ loggableId: lid, name })
+      }
+    }
+    return out
+  }, [allActions, filterNodeId, spec.name])
+
+  if (scenes.length === 0) {
+    return (
+      <div className="p-3 text-xs text-muted-foreground">No 3D scenes</div>
+    )
+  }
+
+  // A single-scene embed fills the frame; a gallery scrolls.
+  if (scenes.length === 1) {
+    return (
+      <div className="h-screen p-3">
+        <ActionCard
+          runId={spec.runId}
+          loggableId={scenes[0].loggableId}
+          name={scenes[0].name}
+          showTimestamp
+          fillParent
+        />
+      </div>
+    )
+  }
+
+  return (
+    <ScrollArea className="h-screen">
+      <div className="space-y-3 p-3">
+        {scenes.map(({ loggableId, name }) => (
+          <ActionCard
+            key={`${loggableId}:${name}`}
+            runId={spec.runId}
+            loggableId={loggableId}
+            name={name}
+            showTimestamp
+          />
+        ))}
       </div>
     </ScrollArea>
   )

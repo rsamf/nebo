@@ -55,6 +55,9 @@ export function MobileSettingsSheet({
     updateSetting('lineSmoothing', 0)
     updateSetting('scatterPointOpacity', 0.8)
     updateSetting('scatterPointSize', 0.5)
+    updateSetting('bodyOpacity', 1)
+    updateSetting('showCollision', false)
+    updateSetting('collisionOpacity', 0.35)
     setAllLabelOpacities(70)
   }
 
@@ -92,6 +95,33 @@ export function MobileSettingsSheet({
             step={0.05}
             format={v => `${Math.round(v * 100)}%`}
             onChange={v => updateSetting('scatterPointSize', v)}
+          />
+          <SettingSlider
+            label="Model opacity"
+            value={settings.bodyOpacity}
+            min={0}
+            max={1}
+            step={0.05}
+            format={v => `${Math.round(v * 100)}%`}
+            onChange={v => updateSetting('bodyOpacity', v)}
+          />
+          <label className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">Show collision geometry</span>
+            <input
+              type="checkbox"
+              className="accent-primary"
+              checked={settings.showCollision}
+              onChange={e => updateSetting('showCollision', e.target.checked)}
+            />
+          </label>
+          <SettingSlider
+            label="Collision opacity"
+            value={settings.collisionOpacity}
+            min={0}
+            max={1}
+            step={0.05}
+            format={v => `${Math.round(v * 100)}%`}
+            onChange={v => updateSetting('collisionOpacity', v)}
           />
           {visibleLabelTriples.length > 0 && (
             <SettingSlider

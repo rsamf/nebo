@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Chart } from 'chart.js'
 import { useStore } from '@/store'
 import { useStreams } from '@/hooks/useStreams'
+import { usePlayback } from '@/hooks/usePlayback'
 import { useTagChips } from '@/components/charts/useTagChips'
 import { DEFAULT_RUN_COLOR } from '@/lib/colors'
 import { withAlpha } from '@/components/charts/withAlpha'
@@ -9,7 +10,7 @@ import { MODALITY_COLORS, STREAM_MODALITIES, type StreamLeaf } from '@/lib/strea
 import { MobileSheet } from './MobileSheet'
 import { Chip, Segmented } from './primitives'
 import { elapsedLabel } from './util'
-import { ChevronLeft, ChevronRight, ChevronUp, GitBranch, Rows3 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronUp, GitBranch, Rows3, Play, Pause } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // Persistent bottom tracker: an event-activity overview (Chart.js area
@@ -142,6 +143,8 @@ export function MobileTracker({ runId }: { runId: string }) {
   const setStep = useStore(s => s.setTimelineStep)
   const setTime = useStore(s => s.setTimelineTime)
   const setMode = useStore(s => s.setTimelineMode)
+  const setPlaying = useStore(s => s.setPlaying)
+  const setFps = useStore(s => s.setFps)
   const viewMode = useStore(s => s.viewMode)
   const setViewMode = useStore(s => s.setViewMode)
   const runColor = useStore(s => s.runColors.get(runId)) ?? DEFAULT_RUN_COLOR
@@ -221,6 +224,10 @@ export function MobileTracker({ runId }: { runId: string }) {
   const playhead = isStep ? timeline.step : timeline.time
   const effective = playhead ?? max
   const scrubPct = range > 0 ? Math.max(0, Math.min(100, ((effective - min) / range) * 100)) : 100
+
+  // Playback drives the shared step, so mobile gets the same control the
+  // desktop tracker bar carries. Step mode only — see usePlayback.
+  usePlayback(Math.round(min), Math.round(max), isStep && range > 0)
 
   const posLabel = isStep ? `step ${Math.round(effective)}` : `+${elapsedLabel(effective - min)}`
 
@@ -307,6 +314,29 @@ export function MobileTracker({ runId }: { runId: string }) {
               value={timeline.mode}
               onChange={setMode}
             />
+          </div>
+
+          <div className="mb-3 flex items-center gap-2">
+            <button
+              className="flex h-8 items-center gap-1.5 rounded-full border border-border px-3 text-xs disabled:opacity-40"
+              disabled={range <= 0}
+              onClick={() => setPlaying(!timeline.playing)}
+            >
+              {timeline.playing ? <Pause size={13} /> : <Play size={13} />}
+              {timeline.playing ? 'Pause' : 'Play'}
+            </button>
+            <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
+              <input
+                type="number"
+                inputMode="numeric"
+                className="h-8 w-14 rounded-md border border-border bg-transparent px-2 text-xs"
+                value={timeline.fps}
+                min={1}
+                max={240}
+                onChange={e => setFps(Number(e.target.value))}
+              />
+              fps
+            </label>
           </div>
 
           <div className="mb-3.5 flex gap-1.5">

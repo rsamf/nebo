@@ -38,6 +38,7 @@ interface StreamCache {
   lastText: TextEntry | undefined
   imagesRef: unknown
   audioRef: unknown
+  actionsRef: unknown
   acc: Map<string, StreamLeaf>
 }
 const cacheByRun = new Map<string, StreamCache>()
@@ -50,6 +51,7 @@ export function useStreams(runId: string | null, enabled = true): StreamModel {
   const texts = useStore(s => (runId ? s.runs.get(runId)?.texts : undefined))
   const loggableImages = useStore(s => (runId ? s.runs.get(runId)?.loggableImages : undefined))
   const loggableAudio = useStore(s => (runId ? s.runs.get(runId)?.loggableAudio : undefined))
+  const loggableActions = useStore(s => (runId ? s.runs.get(runId)?.loggableActions : undefined))
   const graphNodes = useStore(s => (runId ? s.runs.get(runId)?.graph?.nodes : undefined))
   const globalId = useStore(s => (runId ? s.runs.get(runId)?.globalLoggable?.loggableId : undefined))
   const agentId = useStore(s => (runId ? s.runs.get(runId)?.agentLoggable?.loggableId : undefined))
@@ -76,6 +78,7 @@ export function useStreams(runId: string | null, enabled = true): StreamModel {
       && cache.prefixKey === prefixKey
       && cache.imagesRef === loggableImages
       && cache.audioRef === loggableAudio
+      && cache.actionsRef === loggableActions
       && texts !== undefined
       && texts.length >= cache.textsProcessed
       && (cache.textsProcessed === 0 || texts[cache.textsProcessed - 1] === cache.lastText)
@@ -87,6 +90,7 @@ export function useStreams(runId: string | null, enabled = true): StreamModel {
         lastText: undefined,
         imagesRef: loggableImages,
         audioRef: loggableAudio,
+        actionsRef: loggableActions,
         acc: new Map(),
       }
       cacheByRun.set(runId, cache)
@@ -119,6 +123,7 @@ export function useStreams(runId: string | null, enabled = true): StreamModel {
       // Fresh accumulator: walk everything once.
       if (loggableImages) for (const [id, imgs] of Object.entries(loggableImages)) for (const img of imgs) push(id, 'image', img.name, img.step ?? null, img.timestamp)
       if (loggableAudio) for (const [id, entries] of Object.entries(loggableAudio)) for (const a of entries) push(id, 'audio', a.name, a.step ?? null, a.timestamp)
+      if (loggableActions) for (const [id, frames] of Object.entries(loggableActions)) for (const f of frames) push(id, 'action', f.name, f.step ?? null, f.timestamp)
     }
     if (texts) {
       for (let i = cache.textsProcessed; i < texts.length; i++) {
@@ -132,5 +137,5 @@ export function useStreams(runId: string | null, enabled = true): StreamModel {
     const leaves = [...acc.values()]
     const byPath = new Map(leaves.map(l => [l.path, l]))
     return { tree: buildStreamTree(leaves), leaves, byPath }
-  }, [enabled, runId, texts, loggableImages, loggableAudio, graphNodes, globalId, agentId])
+  }, [enabled, runId, texts, loggableImages, loggableAudio, loggableActions, graphNodes, globalId, agentId])
 }

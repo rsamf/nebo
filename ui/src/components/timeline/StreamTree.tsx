@@ -1,7 +1,7 @@
-import { ChevronRight, FileText, Image as ImageIcon, AudioLines } from 'lucide-react'
+import { ChevronRight, FileText, Image as ImageIcon, AudioLines, Boxes } from 'lucide-react'
 import type { FlatRow, StreamModality } from '@/lib/streams'
 
-const ICON: Record<StreamModality, typeof FileText> = { text: FileText, image: ImageIcon, audio: AudioLines }
+const ICON: Record<StreamModality, typeof FileText> = { text: FileText, image: ImageIcon, audio: AudioLines, action: Boxes }
 
 // Presentational tree column. The flattened rows + collapse/selection state
 // are owned by Tracker so this column shares one scroll container (and stays

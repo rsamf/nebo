@@ -14,6 +14,14 @@ export interface TimelineFilter {
 // Playhead filter. Both modes resolve to a single point:
 //  - step mode: entries whose step equals the playhead step.
 //  - time mode: entries at or before the playhead time ("current frame").
+//
+// While playback is running the step is PINNED to where playback started.
+// Every image and audio clip is its own HTTP fetch, so tracking a 30 fps
+// playhead would issue 30 requests per second per panel and render a
+// flicker of half-loaded media. 3D scenes are unaffected — their poses are
+// already in memory — so they animate while media holds still, and media
+// catches up the moment playback stops. Buffering media ahead of the
+// playhead is deliberately out of scope for now.
 export function useTimelineFilter(): TimelineFilter | null {
   const timeline = useStore(s => s.timeline)
 
@@ -22,9 +30,10 @@ export function useTimelineFilter(): TimelineFilter | null {
       if (timeline.time == null) return null
       return { matchEntry: (e: Filterable) => e.timestamp <= timeline.time! }
     }
-    if (timeline.step == null) return null
-    return { matchEntry: (e: Filterable) => e.step === timeline.step }
-  }, [timeline.mode, timeline.time, timeline.step])
+    const step = timeline.playing ? timeline.playbackFrom : timeline.step
+    if (step == null) return null
+    return { matchEntry: (e: Filterable) => e.step === step }
+  }, [timeline.mode, timeline.time, timeline.step, timeline.playing, timeline.playbackFrom])
 }
 
 // Stream-selection narrowing. When a stream is selected, content panels keep
