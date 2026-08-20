@@ -12,6 +12,17 @@ from nebo.logging.bodies import BodyModelRef, normalize_instances
 FAKE_GLB = b"glTF\x02\x00\x00\x00fake-model-bytes"
 
 
+def identity_poses(n: int) -> np.ndarray:
+    """`n` bodies at the origin with unit (xyzw) quaternions.
+
+    Not `np.zeros((n, 7))`: an all-zero quaternion is not a rotation, and
+    normalize_instances rejects it.
+    """
+    poses = np.zeros((n, 7))
+    poses[:, 6] = 1.0
+    return poses
+
+
 @pytest.fixture
 def stub_compile(monkeypatch):
     """Swap the real MJCF/URDF compiler for a deterministic stub.
@@ -33,8 +44,7 @@ def stub_compile(monkeypatch):
 
 
 def test_bare_array_becomes_the_default_instance():
-    poses = np.zeros((3, 7))
-    poses[:, 6] = 1.0
+    poses = identity_poses(3)
     out = normalize_instances(poses, n_bodies=3)
     assert list(out) == ["default"]
     assert len(out["default"]) == 21
@@ -42,7 +52,7 @@ def test_bare_array_becomes_the_default_instance():
 
 def test_dict_keys_become_instance_labels():
     out = normalize_instances(
-        {"policy": np.zeros((2, 7)), "reference": np.zeros((2, 7))},
+        {"policy": identity_poses(2), "reference": identity_poses(2)},
         n_bodies=2,
     )
     assert sorted(out) == ["policy", "reference"]
@@ -63,7 +73,7 @@ def test_4x4_transforms_are_decomposed_to_pos_and_xyzw_quat():
 
 def test_body_count_mismatch_names_both_counts():
     with pytest.raises(ValueError, match="3 bodies but 2 poses"):
-        normalize_instances(np.zeros((2, 7)), n_bodies=3)
+        normalize_instances(identity_poses(2), n_bodies=3)
 
 
 def test_wrong_trailing_dimension_is_a_type_error():
@@ -72,7 +82,7 @@ def test_wrong_trailing_dimension_is_a_type_error():
 
 
 def test_non_finite_poses_are_rejected():
-    poses = np.zeros((2, 7))
+    poses = identity_poses(2)
     poses[1, 0] = np.nan
     with pytest.raises(ValueError, match="NaN or infinite"):
         normalize_instances(poses, n_bodies=2)
@@ -125,7 +135,7 @@ def test_log_body_transform_emits_a_default_instance(
     capturing_client, stub_compile,
 ):
     ref = nb.log_body_model("arm", mjcf="<mujoco/>")
-    nb.log_body_transform("scene", ref, np.zeros((2, 7)), step=0)
+    nb.log_body_transform("scene", ref, identity_poses(2), step=0)
 
     (frame,) = capturing_client.by_type("body_transform")
     assert frame["name"] == "scene"
@@ -138,8 +148,8 @@ def test_log_body_transform_emits_a_default_instance(
 def test_instances_share_one_frame(capturing_client, stub_compile):
     ref = nb.log_body_model("arm", mjcf="<mujoco/>")
     nb.log_body_transform("scene", ref, {
-        "policy": np.zeros((2, 7)),
-        "reference": np.ones((2, 7)),
+        "policy": identity_poses(2),
+        "reference": identity_poses(2) + np.array([1.0, 1, 1, 0, 0, 0, 0]),
     }, step=4)
 
     (frame,) = capturing_client.by_type("body_transform")
@@ -150,8 +160,8 @@ def test_instances_share_one_frame(capturing_client, stub_compile):
 def test_step_auto_increments_per_scene(capturing_client, stub_compile):
     ref = nb.log_body_model("arm", mjcf="<mujoco/>")
     for _ in range(3):
-        nb.log_body_transform("a", ref, np.zeros((2, 7)))
-    nb.log_body_transform("b", ref, np.zeros((2, 7)))
+        nb.log_body_transform("a", ref, identity_poses(2))
+    nb.log_body_transform("b", ref, identity_poses(2))
 
     frames = capturing_client.by_type("body_transform")
     assert [f["step"] for f in frames if f["name"] == "a"] == [0, 1, 2]
@@ -162,14 +172,14 @@ def test_explicit_step_advances_the_cursor_past_it(
     capturing_client, stub_compile,
 ):
     ref = nb.log_body_model("arm", mjcf="<mujoco/>")
-    nb.log_body_transform("a", ref, np.zeros((2, 7)), step=10)
-    nb.log_body_transform("a", ref, np.zeros((2, 7)))
+    nb.log_body_transform("a", ref, identity_poses(2), step=10)
+    nb.log_body_transform("a", ref, identity_poses(2))
     assert [f["step"] for f in capturing_client.by_type("body_transform")] == [10, 11]
 
 
 def test_model_can_be_named_by_string(capturing_client, stub_compile):
     ref = nb.log_body_model("arm", mjcf="<mujoco/>")
-    nb.log_body_transform("scene", "arm", np.zeros((2, 7)))
+    nb.log_body_transform("scene", "arm", identity_poses(2))
     (frame,) = capturing_client.by_type("body_transform")
     assert frame["instances"]["default"]["model"] == ref.model_id
 
@@ -177,13 +187,13 @@ def test_model_can_be_named_by_string(capturing_client, stub_compile):
 def test_unknown_model_name_raises(capturing_client, stub_compile):
     nb.log_body_model("arm", mjcf="<mujoco/>")
     with pytest.raises(ValueError, match="no body model named 'nope'"):
-        nb.log_body_transform("scene", "nope", np.zeros((2, 7)))
+        nb.log_body_transform("scene", "nope", identity_poses(2))
 
 
 def test_pose_count_must_match_the_model(capturing_client, stub_compile):
     ref = nb.log_body_model("arm", mjcf="<mujoco/>")
     with pytest.raises(ValueError, match="2 bodies but 5 poses"):
-        nb.log_body_transform("scene", ref, np.zeros((5, 7)))
+        nb.log_body_transform("scene", ref, identity_poses(5))
 
 
 def test_body_model_is_structural_and_transform_is_not():
@@ -191,3 +201,68 @@ def test_body_model_is_structural_and_transform_is_not():
 
     assert "body_model" in STRUCTURAL_TYPES
     assert "body_transform" not in STRUCTURAL_TYPES
+
+
+# --- regressions from dogfooding on a 27-body humanoid ---------------------
+
+
+def test_same_model_can_be_published_under_two_names(
+    capturing_client, stub_compile,
+):
+    """Comparing two policies means publishing one robot twice by name.
+
+    The registry is keyed by content address, so the second call is a cache
+    hit — but it must still register the requested name, or referring to
+    that name raises "no body model named ...".
+    """
+    a = nb.log_body_model("robot_A", mjcf="<mujoco/>")
+    b = nb.log_body_model("robot_B", mjcf="<mujoco/>")
+
+    assert b.name == "robot_B"
+    assert b.model_id == a.model_id
+    # Identical bytes are still only sent once.
+    assert len(capturing_client.by_type("body_model")) == 1
+
+    nb.log_body_transform("scene", "robot_B", identity_poses(2))
+    (frame,) = capturing_client.by_type("body_transform")
+    assert frame["instances"]["default"]["model"] == a.model_id
+
+
+def test_unnormalized_quaternion_is_rejected():
+    poses = identity_poses(2)
+    poses[1, 3:] = [0.0, 0.0, 0.0, 2.0]
+    with pytest.raises(ValueError, match="body 1 has norm 2"):
+        normalize_instances(poses, n_bodies=2)
+
+
+def test_float32_rounding_is_within_tolerance():
+    """A float32 round-trip must not trip the unit-quaternion check."""
+    poses = identity_poses(2)
+    poses[:, 3:] = np.array([0.5, 0.5, 0.5, 0.5])
+    out = normalize_instances(poses.astype(np.float32), n_bodies=2)
+    assert len(out["default"]) == 14
+
+
+def test_gpu_style_tensors_are_brought_home(capturing_client, stub_compile):
+    """A tensor exposing .detach()/.cpu() must not surface a numpy error."""
+    class FakeCudaTensor:
+        def __init__(self, arr):
+            self._arr = arr
+            self.detached = False
+
+        def detach(self):
+            self.detached = True
+            return self
+
+        def cpu(self):
+            return self._arr
+
+        def __array__(self, *a, **kw):
+            raise TypeError(
+                "can't convert cuda:0 device type tensor to numpy."
+            )
+
+    ref = nb.log_body_model("arm", mjcf="<mujoco/>")
+    nb.log_body_transform("scene", ref, FakeCudaTensor(identity_poses(2)))
+    (frame,) = capturing_client.by_type("body_transform")
+    assert len(frame["instances"]["default"]["pos_quat_xyzw"]) == 14

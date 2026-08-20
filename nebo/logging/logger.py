@@ -566,7 +566,20 @@ def log_body_model(
 
     cached = state._body_models.get(model_id)
     if cached is not None:
-        return cached
+        # Same bytes, possibly a new name. Publishing one robot under two
+        # names to compare two policies is ordinary, so register the alias
+        # and hand back a ref carrying the name that was asked for — the
+        # GLB itself is already in this run's stream and is not re-sent.
+        if name not in state._body_model_names:
+            alias = BodyModelRef(
+                name=name,
+                model_id=cached.model_id,
+                body_names=cached.body_names,
+                source_format=cached.source_format,
+            )
+            state._body_model_names[name] = alias
+            return alias
+        return state._body_model_names[name]
 
     ref = BodyModelRef(
         name=name,

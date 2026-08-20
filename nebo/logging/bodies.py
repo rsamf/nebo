@@ -85,11 +85,26 @@ def _mat_to_quat_xyzw(m: Any) -> tuple[float, float, float, float]:
     return float(x), float(y), float(z), float(w)
 
 
+def _as_array(value: Any):
+    """Array-ify a pose payload, tolerating framework tensors.
+
+    Robotics poses usually live on the GPU, and `np.asarray` on a CUDA
+    tensor raises a bare numpy TypeError that never mentions nebo. Bring
+    the tensor home instead — this is the same courtesy `prepare_image`
+    extends to torch images.
+    """
+    import numpy as np
+
+    if hasattr(value, "detach") and hasattr(value, "cpu"):
+        value = value.detach().cpu()
+    return np.asarray(value, dtype=np.float64)
+
+
 def _flatten_one(value: Any, n_bodies: int, label: str) -> list[float]:
     """One instance's poses -> a flat list of ``7 * n_bodies`` floats."""
     import numpy as np
 
-    arr = np.asarray(value, dtype=np.float64)
+    arr = _as_array(value)
     where = f"instance {label!r}" if label != DEFAULT_INSTANCE else "poses"
 
     if arr.ndim == 3 and arr.shape[1:] == (4, 4):
@@ -112,6 +127,22 @@ def _flatten_one(value: Any, n_bodies: int, label: str) -> list[float]:
         )
     if not np.isfinite(arr).all():
         raise ValueError(f"{where}: poses contain NaN or infinite values")
+
+    # A non-unit quaternion renders a sheared, silently-wrong body. The
+    # tolerance is far looser than float32 round-trip error, so it only
+    # catches real mistakes: an unnormalized quaternion, a scaled one, or
+    # a rotation matrix flattened into the wrong slots. (It cannot catch a
+    # wxyz/xyzw swap — that preserves the norm — which is why `mj_pose`
+    # exists for the framework that gets it wrong.)
+    norms = np.linalg.norm(arr[:, 3:], axis=1)
+    bad = np.abs(norms - 1.0) > 1e-3
+    if bad.any():
+        i = int(np.argmax(bad))
+        raise ValueError(
+            f"{where}: quaternion for body {i} has norm {norms[i]:.6g}, "
+            f"expected 1. Poses are [x, y, z, qx, qy, qz, qw] with a unit "
+            f"quaternion in xyzw order."
+        )
     return [float(v) for v in arr.reshape(-1)]
 
 
