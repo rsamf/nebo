@@ -8,17 +8,22 @@ import { TrackerControls, ModalityChips } from './TrackerControls'
 import { TimelineRuler, TimelineRows } from './TimelineGrid'
 import { generateTicks } from './ticks'
 import { Input } from '@/components/ui/input'
-import { flattenRows, type FlatRow, type StreamModality } from '@/lib/streams'
+import { flattenRows, STREAM_MODALITIES, type FlatRow, type StreamModality } from '@/lib/streams'
 
 const HEIGHT_KEY = 'nebo_tracker_height'
 const ROW_H = 22
 const HEADER_H = 26
 // Desktop header is taller: the tree column stacks the modality chips under
 // the search field, and the ruler must match its height so rows stay aligned.
-const DESKTOP_HEADER_H = 46
+// Tall enough for the chips to wrap onto a second line, which they do once
+// the tree column is narrow (it is capped at 15% of the tracker width).
+const DESKTOP_HEADER_H = 64
 const TREE_W = 220
 const PAD = 12  // horizontal inset (px) so edge ticks/datapoints aren't clipped
-const MODALITIES: StreamModality[] = ['text', 'image', 'audio']
+// Derived from the shared list, never re-declared: a modality missing here
+// is invisible in the tracker even though its chip renders, because
+// `activeModalities` seeds from it.
+const MODALITIES: StreamModality[] = STREAM_MODALITIES
 
 function loadHeight(): number {
   const v = Number(localStorage.getItem(HEIGHT_KEY))
@@ -198,9 +203,19 @@ export function Tracker({ runId }: { runId: string }) {
     scrubbing.current = false; setTouching(false); axis.endPan()
   }
 
-  const minStep = isStep ? min : 0
-  const maxStep = isStep ? max : 0
-  const hasSteps = isStep && max > min
+  // The step domain is computed independently of the active mode: step
+  // navigation and playback must stay reachable from Time mode, since
+  // both flip the tracker into Step mode themselves.
+  const [minStep, maxStep] = useMemo(() => {
+    if (isStep) return [min, max]
+    let lo = Infinity, hi = -Infinity
+    for (const l of domainLeaves) {
+      if (l.minStep != null) lo = Math.min(lo, l.minStep)
+      if (l.maxStep != null) hi = Math.max(hi, l.maxStep)
+    }
+    return lo === Infinity ? [0, 0] : [lo, hi]
+  }, [isStep, min, max, domainLeaves])
+  const hasSteps = maxStep > minStep
 
   return (
     <div className="shrink-0 border-t border-border bg-background flex flex-col" style={collapsed ? undefined : { height }}>

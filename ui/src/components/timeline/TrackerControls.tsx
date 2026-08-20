@@ -61,6 +61,7 @@ export function TrackerControls({ minStep, maxStep, hasSteps, activeModalities, 
   const timeline = useStore(s => s.timeline)
   const setMode = useStore(s => s.setTimelineMode)
   const setStep = useStore(s => s.setTimelineStep)
+  const selectStep = useStore(s => s.selectTimelineStep)
   const setPlaying = useStore(s => s.setPlaying)
   const setFps = useStore(s => s.setFps)
   const isStep = timeline.mode === 'step'
@@ -70,11 +71,14 @@ export function TrackerControls({ minStep, maxStep, hasSteps, activeModalities, 
   // since every panel follows that playhead.
   usePlayback(minStep, maxStep, hasSteps)
 
+  // Stepping from Time mode flips to Step mode, exactly as clicking a
+  // chart datapoint does — otherwise the arrows would set a step the
+  // tracker isn't currently displaying.
   const stepBy = useCallback((d: number) => {
     if (!hasSteps) return
     const cur = timeline.step ?? minStep
-    setStep(Math.max(minStep, Math.min(maxStep, cur + d)))
-  }, [hasSteps, timeline.step, minStep, maxStep, setStep])
+    selectStep(Math.max(minStep, Math.min(maxStep, cur + d)))
+  }, [hasSteps, timeline.step, minStep, maxStep, selectStep])
 
   // Ctrl/⌘ + Left/Right steps the playhead (skips when typing in a field).
   useEffect(() => {

@@ -7,10 +7,16 @@ and ``ui/src/lib/refs.ts``.
 
 Layout of an exported GLB::
 
-    nebo:body:0:world              one node per body, in model body order
-    nebo:body:1:pelvis
-      nebo:geom:visual:7           child geoms, posed in the body frame
-      nebo:geom:collision:8
+    nebo__body__0__world           one node per body, in model body order
+    nebo__body__1__pelvis
+      nebo__geom__visual__7        child geoms, posed in the body frame
+      nebo__geom__collision__8
+
+The separator is ``__`` rather than something prettier like ``:`` because
+three.js sanitizes node names on load (``PropertyBinding.sanitizeNodeName``
+deletes ``[ ] . : /`` and turns whitespace into ``_``). A colon-delimited
+name arrives in the browser as ``nebobody1pelvis``, which no parser can
+split — so the viewer would silently fail to pose anything.
 
 Body nodes are exported at identity: they are placeholders whose world
 transform the UI overwrites on every frame from the logged
@@ -26,8 +32,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
-NODE_BODY_PREFIX = "nebo:body:"
-NODE_GEOM_PREFIX = "nebo:geom:"
+NODE_BODY_PREFIX = "nebo__body__"
+NODE_GEOM_PREFIX = "nebo__geom__"
 
 VISUAL = "visual"
 COLLISION = "collision"
@@ -56,11 +62,11 @@ class Body:
 
 
 def body_node_name(index: int, name: str) -> str:
-    return f"{NODE_BODY_PREFIX}{index}:{name}"
+    return f"{NODE_BODY_PREFIX}{index}__{name}"
 
 
 def geom_node_name(kind: str, index: int) -> str:
-    return f"{NODE_GEOM_PREFIX}{kind}:{index}"
+    return f"{NODE_GEOM_PREFIX}{kind}__{index}"
 
 
 def classify(kinds: Sequence[str]) -> list[str]:

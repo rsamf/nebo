@@ -9,7 +9,7 @@
 // instances (which GLB, where each body is, how to tint it) and owns nothing
 // about steps, scenes or runs.
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { instantiate } from './glbCache'
@@ -41,6 +41,8 @@ interface Loaded {
   bodies: Map<number, THREE.Object3D>
   visual: THREE.Mesh[]
   collision: THREE.Mesh[]
+  /** Meshes belonging to body 0 — the world frame's static scenery. */
+  world: Set<THREE.Mesh>
   /** Base colors captured before any tint, so tinting is reversible. */
   baseColors: Map<THREE.Material, THREE.Color>
 }
@@ -58,6 +60,12 @@ export default function SceneViewer({
   const controlsRef = useRef<OrbitControls | null>(null)
   const loadedRef = useRef(new Map<string, Loaded>())
   const framedRef = useRef(false)
+  const mountedRef = useRef(true)
+  // Bumped whenever a GLB finishes loading. Models arrive asynchronously,
+  // usually AFTER the last `instances` change, so without this the pose
+  // and appearance effects would never re-run for them and the model would
+  // sit at its rest pose with default materials.
+  const [loadedVersion, setLoadedVersion] = useState(0)
 
   // --- renderer lifecycle (mount once) ---
   useEffect(() => {
@@ -124,6 +132,7 @@ export default function SceneViewer({
     // Captured for the cleanup below: the ref's identity is stable for the
     // component's lifetime, but reading it in cleanup trips the lint rule.
     const loadedInstances = loadedRef.current
+    mountedRef.current = true
 
     let frame = 0
     const tick = () => {
@@ -135,6 +144,7 @@ export default function SceneViewer({
     tick()
 
     return () => {
+      mountedRef.current = false
       cancelAnimationFrame(frame)
       ro.disconnect()
       io.disconnect()
@@ -159,7 +169,6 @@ export default function SceneViewer({
   useEffect(() => {
     const scene = sceneRef.current
     if (!scene) return
-    let cancelled = false
     const wanted = new Map(instances.map(i => [i.key, i]))
 
     for (const [key, loaded] of [...loadedRef.current]) {
@@ -179,15 +188,21 @@ export default function SceneViewer({
       // start a second instantiation of the same instance.
       loadedRef.current.set(instance.key, {
         root: new THREE.Group(), mediaUrl: instance.mediaUrl,
-        bodies: new Map(), visual: [], collision: [], baseColors: new Map(),
+        bodies: new Map(), visual: [], collision: [],
+        world: new Set(), baseColors: new Map(),
       })
       void instantiate(instance.mediaUrl).then(root => {
+        // Deliberately NOT guarded by an effect-scoped "cancelled" flag:
+        // this effect re-runs on every frame, and cancelling an in-flight
+        // load would strand the slot claimed above as an empty placeholder
+        // forever. The slot's own identity is the correct guard.
         const slot = loadedRef.current.get(instance.key)
-        if (cancelled || !slot || slot.mediaUrl !== instance.mediaUrl) return
+        if (!mountedRef.current || !slot || slot.mediaUrl !== instance.mediaUrl) return
 
         const bodies = new Map<number, THREE.Object3D>()
         const visual: THREE.Mesh[] = []
         const collision: THREE.Mesh[] = []
+        const world = new Set<THREE.Mesh>()
         const baseColors = new Map<THREE.Material, THREE.Color>()
         root.traverse(obj => {
           const body = parseBodyNode(obj.name)
@@ -200,15 +215,22 @@ export default function SceneViewer({
           }
           const mesh = obj as THREE.Mesh
           if (!mesh.isMesh) return
-          // A geom node may be the mesh itself or its parent, so inherit
-          // the kind from the nearest tagged ancestor.
+          // A geom node may be the mesh itself or its parent, and its
+          // owning body is further up, so resolve both from the nearest
+          // tagged ancestor.
           let scan: THREE.Object3D | null = obj
           let resolved: 'visual' | 'collision' | null = null
-          while (scan && !resolved) {
-            resolved = parseGeomKind(scan.name)
+          let bodyIndex: number | null = null
+          while (scan) {
+            if (!resolved) resolved = parseGeomKind(scan.name)
+            if (bodyIndex == null) {
+              const owner = parseBodyNode(scan.name)
+              if (owner) bodyIndex = owner.index
+            }
             scan = scan.parent
           }
           ;(resolved === 'collision' ? collision : visual).push(mesh)
+          if (bodyIndex === 0) world.add(mesh)
           for (const m of meshMaterials(mesh)) {
             const colored = m as THREE.Material & { color?: THREE.Color }
             if (colored.color) baseColors.set(m, colored.color.clone())
@@ -219,13 +241,13 @@ export default function SceneViewer({
         slot.bodies = bodies
         slot.visual = visual
         slot.collision = collision
+        slot.world = world
         slot.baseColors = baseColors
         scene.add(root)
         framedRef.current = false
+        setLoadedVersion(v => v + 1)
       })
     }
-
-    return () => { cancelled = true }
   }, [instances])
 
   // --- write poses (every frame change) ---
@@ -254,12 +276,20 @@ export default function SceneViewer({
     const camera = cameraRef.current
     const controls = controlsRef.current
     if (!camera || !controls) return
+    // Frame on the ARTICULATED bodies, not the whole model. Body 0 is the
+    // world/base frame, which typically holds the ground plane and other
+    // static scenery — a 20 m floor would shrink a 0.5 m arm to a speck.
+    // A model whose only body is the world falls back to framing that.
     const box = new THREE.Box3()
     let any = false
     for (const instance of instances) {
       const loaded = loadedRef.current.get(instance.key)
       if (!loaded || loaded.bodies.size === 0 || !instance.visible) continue
-      box.expandByObject(loaded.root)
+      const movable = [...loaded.bodies.entries()].filter(([i]) => i !== 0)
+      const framed = movable.length > 0
+        ? movable.map(([, node]) => node)
+        : [loaded.root]
+      for (const node of framed) box.expandByObject(node)
       any = true
     }
     if (!any || box.isEmpty()) return
@@ -275,16 +305,24 @@ export default function SceneViewer({
     camera.updateProjectionMatrix()
     controls.update()
     framedRef.current = true
-  }, [instances])
+  }, [instances, loadedVersion])
 
   // --- appearance: opacity, collision visibility, per-instance tint ---
   useEffect(() => {
+    // Body 0 is the world frame: the ground plane and any other static
+    // scenery. It belongs to the SCENE, not to an instance — so only the
+    // first visible instance draws it (otherwise two robots mean two
+    // coincident floors that z-fight) and it is never tinted.
+    let primary = true
     for (const instance of instances) {
       const loaded = loadedRef.current.get(instance.key)
       if (!loaded) continue
+      const drawsWorld = primary
+      if (instance.visible) primary = false
       const apply = (meshes: THREE.Mesh[], opacity: number, shown: boolean) => {
         for (const mesh of meshes) {
-          mesh.visible = shown
+          const isWorld = loaded.world.has(mesh)
+          mesh.visible = shown && (!isWorld || drawsWorld)
           for (const m of meshMaterials(mesh)) {
             m.opacity = opacity
             // Transparency is enabled only when it is actually needed:
@@ -294,7 +332,7 @@ export default function SceneViewer({
             const colored = m as THREE.Material & { color?: THREE.Color }
             if (!colored.color) continue
             const base = loaded.baseColors.get(m)
-            if (instance.tint) colored.color.set(instance.tint)
+            if (instance.tint && !isWorld) colored.color.set(instance.tint)
             else if (base) colored.color.copy(base)
           }
         }
@@ -302,7 +340,7 @@ export default function SceneViewer({
       apply(loaded.visual, bodyOpacity, bodyOpacity > 0)
       apply(loaded.collision, collisionOpacity, showCollision && collisionOpacity > 0)
     }
-  }, [instances, bodyOpacity, showCollision, collisionOpacity])
+  }, [instances, bodyOpacity, showCollision, collisionOpacity, loadedVersion])
 
   // The canvas is always mounted, even with no instances: remounting it
   // would strand the WebGL context created by the effect above.

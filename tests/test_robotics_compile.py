@@ -41,8 +41,22 @@ def test_mj_pose_does_not_alias_simulator_buffers():
 
 
 def test_node_names_follow_the_documented_contract():
-    assert body_node_name(3, "pelvis") == "nebo:body:3:pelvis"
-    assert geom_node_name(COLLISION, 8) == "nebo:geom:collision:8"
+    assert body_node_name(3, "pelvis") == "nebo__body__3__pelvis"
+    assert geom_node_name(COLLISION, 8) == "nebo__geom__collision__8"
+
+
+def test_node_names_survive_three_js_sanitization():
+    """three's GLTFLoader deletes [ ] . : / from every node name.
+
+    A colon-delimited name would reach the viewer as "nebobody3pelvis" and
+    no body would ever be posed — the whole scene would render at rest.
+    Keep the separator out of that reserved set.
+    """
+    import re
+
+    reserved = re.compile(r"[\[\].:/\s]")
+    for name in (body_node_name(3, "pelvis"), geom_node_name(VISUAL, 8)):
+        assert not reserved.search(name), name
 
 
 def test_collision_only_models_are_promoted_to_visual():
@@ -71,11 +85,11 @@ def test_build_glb_emits_one_node_per_body_in_order():
         Body("link2", [Geom(box.copy(), np.eye(4), COLLISION, (0, 1, 0, 1))]),
     ]
     names = [n.get("name") for n in _glb_nodes(build_glb(bodies))]
-    assert "nebo:body:0:world" in names
-    assert "nebo:body:1:link1" in names
-    assert "nebo:body:2:link2" in names
-    assert any(n and n.startswith("nebo:geom:visual:") for n in names)
-    assert any(n and n.startswith("nebo:geom:collision:") for n in names)
+    assert "nebo__body__0__world" in names
+    assert "nebo__body__1__link1" in names
+    assert "nebo__body__2__link2" in names
+    assert any(n and n.startswith("nebo__geom__visual__") for n in names)
+    assert any(n and n.startswith("nebo__geom__collision__") for n in names)
 
 
 def test_build_glb_rejects_a_model_with_no_geometry():
