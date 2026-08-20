@@ -19,6 +19,8 @@ import { parseRef } from '@/lib/refs'
  *   ?run=X&image=NAME        → 'image'
  *   ?run=X&audios            → 'audios'
  *   ?run=X&audio=NAME        → 'audio'
+ *   ?run=X&actions           → 'actions' (every 3D scene; &node=Y filters)
+ *   ?run=X&action=NAME       → 'action'  (one 3D scene)
  */
 export type EmbeddedKind =
   | 'run'
@@ -32,6 +34,8 @@ export type EmbeddedKind =
   | 'image'
   | 'audios'
   | 'audio'
+  | 'actions'
+  | 'action'
 
 export interface EmbeddedView {
   kind: EmbeddedKind
@@ -74,6 +78,8 @@ function parse(): EmbeddedView | null {
   if (image) return { kind: 'image', runId, nodeRef, name: image }
   const audio = params.get('audio')
   if (audio) return { kind: 'audio', runId, nodeRef, name: audio }
+  const action = params.get('action')
+  if (action) return { kind: 'action', runId, nodeRef, name: action }
 
   // Text: `?text` (bare) shows the panel, `?text=NAME` one named stream.
   if (params.has('text')) {
@@ -86,6 +92,7 @@ function parse(): EmbeddedView | null {
   if (params.has('metrics')) return { kind: 'metrics', runId, nodeRef, name: null }
   if (params.has('images')) return { kind: 'images', runId, nodeRef, name: null }
   if (params.has('audios')) return { kind: 'audios', runId, nodeRef, name: null }
+  if (params.has('actions')) return { kind: 'actions', runId, nodeRef, name: null }
   if (params.has('dag')) return { kind: 'dag', runId, nodeRef, name: null }
   if (params.has('flat')) return { kind: 'flat', runId, nodeRef, name: null }
 
@@ -137,6 +144,7 @@ interface EmbeddedUrlSpec {
   metric?: string
   image?: string
   audio?: string
+  action?: string
   // Text: `true` → the whole text panel; a string → one named stream.
   text?: string | boolean
   // Panel-style slice (no single item).
@@ -155,6 +163,7 @@ export function buildEmbeddedUrl(spec: EmbeddedUrlSpec): string {
   if (spec.metric) params.set('metric', spec.metric)
   if (spec.image) params.set('image', spec.image)
   if (spec.audio) params.set('audio', spec.audio)
+  if (spec.action) params.set('action', spec.action)
   if (typeof spec.text === 'string') params.set('text', spec.text)
   else if (spec.text) params.set('text', '')
   if (spec.dag) params.set('dag', '')

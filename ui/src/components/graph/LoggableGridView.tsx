@@ -14,8 +14,9 @@ import { DEFAULT_RUN_COLOR } from '@/lib/colors'
 import { useTimelineFilter } from '@/hooks/useTimelineFilter'
 import { useContextMenu } from '@/hooks/useContextMenu'
 import { GridCardContextMenu, type GridCardKind } from './GridCardContextMenu'
+import { ActionCard } from '@/components/actions/ActionCard'
 import { NAV_MODALITY_ORDER, type NavModality } from '@/lib/navTarget'
-import type { LoggableMetricSeries, TextEntry } from '@/lib/api'
+import type { ActionFrame, LoggableMetricSeries, TextEntry } from '@/lib/api'
 
 interface LoggableGridViewProps {
   runId: string
@@ -171,7 +172,7 @@ function AudioCardBody({ runId, entries }: { runId: string; entries: AudioEntry[
 
 // ─── Tab + section model ────────────────────────────────────────────────────
 
-type TabKey = 'text' | 'metrics' | 'images' | 'audio'
+type TabKey = 'text' | 'metrics' | 'images' | 'audio' | 'actions'
 
 interface CardSpec {
   cardId: string                       // unique per (section, tab, name)
@@ -203,6 +204,8 @@ const EMPTY_TEXTS: TextEntry[] = []
 const EMPTY_LOGGABLE_IMAGES: Record<string, ImageEntry[]> = {}
 const EMPTY_LOGGABLE_AUDIO: Record<string, AudioEntry[]> = {}
 const EMPTY_LOGGABLE_METRICS: Record<string, Record<string, LoggableMetricSeries>> = {}
+const EMPTY_ACTIONS: ActionFrame[] = []
+const EMPTY_LOGGABLE_ACTIONS: Record<string, ActionFrame[]> = {}
 
 // How long a deep-linked card stays flashed.
 const HIGHLIGHT_MS = 3000
@@ -211,6 +214,7 @@ const HIGHLIGHT_MS = 3000
 // the shared modality order so desktop and mobile resolve links the same.
 const MODALITY_TO_TAB: Record<NavModality, TabKey> = {
   text: 'text', metric: 'metrics', image: 'images', audio: 'audio',
+  action: 'actions',
 }
 const TAB_ORDER: TabKey[] = NAV_MODALITY_ORDER.map(m => MODALITY_TO_TAB[m])
 
@@ -262,10 +266,12 @@ function SingleRunGridCards({ runId }: { runId: string }) {
   const allMetricsRaw = useStore(s => s.runs.get(runId)?.loggableMetrics)
   const allImagesRaw = useStore(s => s.runs.get(runId)?.loggableImages)
   const allAudioRaw = useStore(s => s.runs.get(runId)?.loggableAudio)
+  const allActionsRaw = useStore(s => s.runs.get(runId)?.loggableActions)
   const allTexts = allTextsRaw ?? EMPTY_TEXTS
   const allMetrics = allMetricsRaw ?? EMPTY_LOGGABLE_METRICS
   const allImages = allImagesRaw ?? EMPTY_LOGGABLE_IMAGES
   const allAudio = allAudioRaw ?? EMPTY_LOGGABLE_AUDIO
+  const allActions = allActionsRaw ?? EMPTY_LOGGABLE_ACTIONS
 
   // Section list: Global + Agent first, then function nodes in topo order.
   const sectionDescriptors = useMemo(() => {
@@ -303,6 +309,7 @@ function SingleRunGridCards({ runId }: { runId: string }) {
     const metrics: SectionSpec[] = []
     const images: SectionSpec[] = []
     const audio: SectionSpec[] = []
+    const actions: SectionSpec[] = []
 
     for (const { sectionId, label } of sectionDescriptors) {
       // Text — one card per stream name on this loggable, mirroring how
@@ -403,10 +410,38 @@ function SingleRunGridCards({ runId }: { runId: string }) {
           })),
         })
       }
+
+      // Actions — one card per scene name. Frames repeat the name once
+      // per step, so the card list is the distinct set.
+      const loggableActions = allActions[sectionId] ?? EMPTY_ACTIONS
+      if (loggableActions.length > 0) {
+        const sceneNames: string[] = []
+        const seen = new Set<string>()
+        for (const frame of loggableActions) {
+          const name = frame.name || 'scene'
+          if (seen.has(name)) continue
+          seen.add(name)
+          sceneNames.push(name)
+        }
+        actions.push({
+          sectionId,
+          label,
+          cards: sceneNames.map(name => ({
+            cardId: `action:${sectionId}:${name}`,
+            title: `${label} > ${name}`,
+            render: () => (
+              <ActionCard runId={runId} loggableId={sectionId} name={name} fillParent />
+            ),
+            kind: 'action' as const,
+            loggableId: sectionId,
+            name,
+          })),
+        })
+      }
     }
 
-    return { text, metrics, images, audio }
-  }, [runId, sectionDescriptors, textsBySection, allMetrics, allImages, allAudio])
+    return { text, metrics, images, audio, actions }
+  }, [runId, sectionDescriptors, textsBySection, allMetrics, allImages, allAudio, allActions])
 
   return <GridShell runId={runId} tabs={tabs} loading={!graph} />
 }
@@ -485,6 +520,7 @@ function ComparisonGridCards({ runIds }: { runIds: string[] }) {
     const metrics: SectionSpec[] = []
     const images: SectionSpec[] = []
     const audio: SectionSpec[] = []
+    const actions: SectionSpec[] = []
 
     for (const { sectionId, label } of sectionDescriptors) {
       // Card names are unioned across runs so a stream that exists in only
@@ -497,6 +533,8 @@ function ComparisonGridCards({ runIds }: { runIds: string[] }) {
       const imageSeen = new Set<string>()
       const audioNames: string[] = []
       const audioSeen = new Set<string>()
+      const sceneNames: string[] = []
+      const sceneSeen = new Set<string>()
       for (const rid of runIds) {
         const run = runs.get(rid)
         if (!run) continue
@@ -517,6 +555,12 @@ function ComparisonGridCards({ runIds }: { runIds: string[] }) {
           if (audioSeen.has(a.name)) continue
           audioSeen.add(a.name)
           audioNames.push(a.name)
+        }
+        for (const f of run.loggableActions[sectionId] ?? []) {
+          const name = f.name || 'scene'
+          if (sceneSeen.has(name)) continue
+          sceneSeen.add(name)
+          sceneNames.push(name)
         }
       }
 
@@ -613,9 +657,35 @@ function ComparisonGridCards({ runIds }: { runIds: string[] }) {
           })),
         })
       }
+
+      // Actions — every compared run is merged into ONE scene (one WebGL
+      // context, robots side by side, tinted by run identity), so this is
+      // deliberately NOT a ComparisonGrid of viewers.
+      if (sceneNames.length > 0) {
+        actions.push({
+          sectionId,
+          label,
+          cards: sceneNames.map(name => ({
+            cardId: `action:${sectionId}:${name}`,
+            title: `${label} > ${name}`,
+            render: () => (
+              <ActionCard
+                runId={effectiveRunIds[0] ?? runIds[0]}
+                loggableId={sectionId}
+                name={name}
+                comparisonRunIds={runIds}
+                fillParent
+              />
+            ),
+            kind: 'action' as const,
+            loggableId: sectionId,
+            name,
+          })),
+        })
+      }
     }
 
-    return { text, metrics, images, audio }
+    return { text, metrics, images, audio, actions }
   }, [runs, runIds, sectionDescriptors, effectiveRunIds, activeRuns, runColors, runNameFor])
 
   return <GridShell runId={anchorRunId} tabs={tabs} loading={!runs.get(anchorRunId)?.graph} />
@@ -643,6 +713,7 @@ function GridShell({ runId, tabs, loading }: {
       { key: 'metrics', label: 'Metrics' },
       { key: 'images', label: 'Images' },
       { key: 'audio', label: 'Audio' },
+      { key: 'actions', label: 'Actions' },
     ]
     return order.filter(t => tabs[t.key].length > 0)
   }, [tabs])

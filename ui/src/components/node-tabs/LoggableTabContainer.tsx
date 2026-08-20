@@ -20,9 +20,10 @@ const allTabs: { key: NodeTab; label: string; alwaysShow: boolean }[] = [
   { key: 'metrics', label: 'Metrics', alwaysShow: false },
   { key: 'images', label: 'Images', alwaysShow: false },
   { key: 'audio', label: 'Audio', alwaysShow: false },
+  { key: 'actions', label: 'Actions', alwaysShow: false },
 ]
 
-const VALID_TABS: readonly NodeTab[] = ['text', 'metrics', 'images', 'audio']
+const VALID_TABS: readonly NodeTab[] = ['text', 'metrics', 'images', 'audio', 'actions']
 
 export function LoggableTabContainer({ runId, loggableId, fillParent = false }: LoggableTabContainerProps) {
   const run = useStore(s => s.runs.get(runId))
@@ -83,6 +84,13 @@ export function LoggableTabContainer({ runId, loggableId, fillParent = false }: 
     return (run?.loggableAudio?.[loggableId]?.length ?? 0) > 0
   }, [isComparison, comparisonRunIds, runs, run, loggableId])
 
+  const hasActions = useMemo(() => {
+    if (isComparison) {
+      return comparisonRunIds.some(rid => (runs.get(rid)?.loggableActions?.[loggableId]?.length ?? 0) > 0)
+    }
+    return (run?.loggableActions?.[loggableId]?.length ?? 0) > 0
+  }, [isComparison, comparisonRunIds, runs, run, loggableId])
+
   const visibleTabs = useMemo(() => {
     return allTabs.filter(tab => {
       if (tab.alwaysShow) return true
@@ -91,10 +99,11 @@ export function LoggableTabContainer({ runId, loggableId, fillParent = false }: 
         case 'metrics': return hasMetrics
         case 'images': return hasImages
         case 'audio': return hasAudio
+        case 'actions': return hasActions
         default: return false
       }
     })
-  }, [hasText, hasMetrics, hasImages, hasAudio])
+  }, [hasText, hasMetrics, hasImages, hasAudio, hasActions])
 
   // Nothing to show — let parents collapse the surrounding chrome (no
   // empty bordered tab strip on nodes that haven't logged anything).

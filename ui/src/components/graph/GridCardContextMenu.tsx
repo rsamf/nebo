@@ -8,7 +8,7 @@ import { buildEmbeddedUrl } from '@/hooks/useEmbeddedView'
  * What the card represents in the grid view. Used to pick the right
  * URL-param slice when building an iframe URL via `buildEmbeddedUrl`.
  */
-export type GridCardKind = 'text' | 'metric' | 'image' | 'audio'
+export type GridCardKind = 'text' | 'metric' | 'image' | 'audio' | 'action'
 
 interface GridCardContextMenuProps {
   isOpen: boolean
@@ -45,6 +45,8 @@ export function GridCardContextMenu({
           return { runId, node, image: name }
         case 'audio':
           return { runId, node, audio: name }
+        case 'action':
+          return { runId, node, action: name }
       }
     })()
     void navigator.clipboard?.writeText(buildEmbeddedUrl(spec))

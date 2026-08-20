@@ -3,6 +3,7 @@ import { NodeText } from './NodeText'
 import { NodeMetrics } from './NodeMetrics'
 import { NodeImages } from './NodeImages'
 import { NodeAudio } from './NodeAudio'
+import { NodeActions } from '@/components/actions/NodeActions'
 
 interface LoggableTabContentProps {
   runId: string
@@ -26,5 +27,7 @@ export function LoggableTabContent({ runId, loggableId, tab, comparisonRunIds, f
       return <NodeImages runId={runId} loggableId={loggableId} comparisonRunIds={comparisonRunIds} fillParent={fillParent} />
     case 'audio':
       return <NodeAudio runId={runId} loggableId={loggableId} comparisonRunIds={comparisonRunIds} fillParent={fillParent} />
+    case 'actions':
+      return <NodeActions runId={runId} loggableId={loggableId} comparisonRunIds={comparisonRunIds} fillParent={fillParent} />
   }
 }

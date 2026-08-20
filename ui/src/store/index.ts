@@ -39,6 +39,17 @@ export interface Settings {
   // Scatter point size scale (0–1). 1 keeps the original radii (~7px
   // active, ~4px default, ~3px dimmed); 0.5 halves them.
   scatterPointSize: number
+  // --- Action scenes (3D) ---
+  // Opacity of a body model's visual geometry (0–1).
+  bodyOpacity: number
+  // Collision geometry is authored for the physics engine, not the eye,
+  // so it is off by default and drawn translucent when shown.
+  showCollision: boolean
+  collisionOpacity: number
+  // Tint each instance in a scene with its own color so a reference pose
+  // reads apart from a policy-actuated one. Single-instance scenes keep
+  // the model's own materials (see ActionCard).
+  tintInstances: boolean
 }
 
 const SETTINGS_KEY = 'gb_settings'
@@ -55,6 +66,10 @@ const DEFAULT_SETTINGS: Settings = {
   histogramBinCount: DEFAULT_HISTOGRAM_BIN_COUNT,
   scatterPointOpacity: 0.8,
   scatterPointSize: 0.5,
+  bodyOpacity: 1,
+  showCollision: false,
+  collisionOpacity: 0.35,
+  tintInstances: true,
 }
 
 function loadSettings(): Settings {
@@ -127,6 +142,11 @@ export interface TimelineState {
   step: number | null
   time: number | null          // single playhead timestamp
   selectedStream: string | null
+  // Playback drives the shared step forward so a 3D scene, its metrics
+  // and its text all advance together. Lives on the tracker because the
+  // playhead does; see usePlayback.
+  playing: boolean
+  fps: number
 }
 
 export interface ComparisonGroup {
@@ -273,6 +293,11 @@ interface NeboStore {
   selectTimelineStep: (step: number) => void
   setTimelineTime: (time: number | null) => void
   setSelectedStream: (path: string | null) => void
+  // Starting playback flips to step mode — the same flip clicking a chart
+  // datapoint performs, since a playhead advancing through time and one
+  // advancing through steps are different domains.
+  setPlaying: (playing: boolean) => void
+  setFps: (fps: number) => void
 
   // Settings
   settings: Settings
@@ -449,12 +474,25 @@ export const useStore = create<NeboStore>((set, get) => ({
   rightPanelOpen: true,
   toggleRightPanel: () => set(state => ({ rightPanelOpen: !state.rightPanelOpen })),
 
-  timeline: { mode: 'time', step: null, time: null, selectedStream: null },
+  timeline: {
+    mode: 'time', step: null, time: null, selectedStream: null,
+    playing: false, fps: 30,
+  },
   setTimelineMode: (mode) => set(state => ({ timeline: { ...state.timeline, mode } })),
   setTimelineStep: (step) => set(state => ({ timeline: { ...state.timeline, step } })),
   selectTimelineStep: (step) => set(state => ({ timeline: { ...state.timeline, mode: 'step', step } })),
   setTimelineTime: (time) => set(state => ({ timeline: { ...state.timeline, time } })),
   setSelectedStream: (path) => set(state => ({ timeline: { ...state.timeline, selectedStream: path } })),
+  setPlaying: (playing) => set(state => ({
+    timeline: {
+      ...state.timeline,
+      playing,
+      mode: playing ? 'step' : state.timeline.mode,
+    },
+  })),
+  setFps: (fps) => set(state => ({
+    timeline: { ...state.timeline, fps: Math.max(1, Math.min(240, fps)) },
+  })),
 
   runTree: EMPTY_TREE,
   setRunTree: (tree) => set({ runTree: tree }),

@@ -9,6 +9,7 @@ import { useTimelineFilter } from '@/hooks/useTimelineFilter'
 import { SingleRunChart } from '@/components/node-tabs/NodeMetrics'
 import { scatterLabels } from '@/components/charts/scatterShape'
 import { ImageWithLabels } from '@/components/shared/ImageWithLabels'
+import { ActionCard } from '@/components/actions/ActionCard'
 import { Modal } from '@/components/ui/modal'
 import { LongPressChartGate } from './LongPressChartGate'
 import { MetricPreview } from './MetricPreview'
@@ -21,22 +22,25 @@ import { formatTimestamp, mediaEntryKey } from '@/lib/utils'
 // Tapping a metric card expands the full chart inline (with the tracker
 // playhead); charts stay mounted per the useChartJs remount invariant.
 
-type TypeFilter = 'all' | 'metrics' | 'media' | 'text'
+type TypeFilter = 'all' | 'metrics' | 'media' | 'text' | 'actions'
 
 const TYPE_FILTERS: { value: TypeFilter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'metrics', label: 'Metrics' },
   { value: 'media', label: 'Media' },
   { value: 'text', label: 'Text' },
+  { value: 'actions', label: 'Actions' },
 ]
 
 // Deep-link landing: the feed's type filter is mobile's equivalent of the
 // desktop tab, and card keys are the scroll anchors.
 const MODALITY_TO_TYPE: Record<NavModality, TypeFilter> = {
   text: 'text', metric: 'metrics', image: 'media', audio: 'media',
+  action: 'actions',
 }
+// `a` already belongs to audio, so scenes take `act`.
 const MODALITY_TO_PREFIX: Record<NavModality, string> = {
-  text: 't', metric: 'm', image: 'i', audio: 'a',
+  text: 't', metric: 'm', image: 'i', audio: 'a', action: 'act',
 }
 const HIGHLIGHT_MS = 3000
 
@@ -100,6 +104,7 @@ export function MobileFeed({ runId }: { runId: string }) {
     Object.keys(run?.loggableMetrics[id] ?? {}).length > 0 ||
     (run?.loggableImages[id]?.length ?? 0) > 0 ||
     (run?.loggableAudio[id]?.length ?? 0) > 0 ||
+    (run?.loggableActions[id]?.length ?? 0) > 0 ||
     textsByStage.has(id)
   for (const extra of [globalId, agentId]) {
     if (!stages.includes(extra) && hasContent(extra)) stages.push(extra)
@@ -210,10 +215,24 @@ function StageRows({
   const metrics = run?.loggableMetrics[loggableId] ?? {}
   const images = run?.loggableImages[loggableId]
   const audio = run?.loggableAudio[loggableId]
+  const actionFrames = run?.loggableActions[loggableId]
 
   const imagesByName = useMemo(() => groupByName(images ?? []), [images])
   const audioByName = useMemo(() => groupByName(audio ?? []), [audio])
   const textsByName = useMemo(() => groupByName(texts ?? []), [texts])
+  // Scene frames repeat their name once per step; the feed wants the
+  // distinct scenes, each rendered as one live viewport.
+  const sceneNames = useMemo(() => {
+    const out: string[] = []
+    const seen = new Set<string>()
+    for (const frame of actionFrames ?? []) {
+      const name = frame.name || 'scene'
+      if (seen.has(name)) continue
+      seen.add(name)
+      out.push(name)
+    }
+    return out
+  }, [actionFrames])
 
   const anchor = (cardId: string, node: React.ReactNode) => (
     <FeedCardAnchor key={cardId} cardId={cardId} highlighted={highlightedCardId === cardId}>
@@ -246,6 +265,16 @@ function StageRows({
           ))}
         </>
       )}
+      {(typeFilter === 'all' || typeFilter === 'actions') &&
+        sceneNames.map(name => anchor(
+          `act:${loggableId}:${name}`,
+          <div className="rounded-xl border border-border bg-card p-3">
+            <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+              {nodeLabel}
+            </div>
+            <ActionCard runId={runId} loggableId={loggableId} name={name} showTimestamp />
+          </div>,
+        ))}
       {(typeFilter === 'all' || typeFilter === 'text') &&
         [...textsByName.entries()].map(([name, entries]) => anchor(
           `t:${loggableId}:${name}`,

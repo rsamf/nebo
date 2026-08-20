@@ -5,11 +5,11 @@
 
 import type { RunState } from '@/store'
 
-export type NavModality = 'text' | 'metric' | 'image' | 'audio'
+export type NavModality = 'text' | 'metric' | 'image' | 'audio' | 'action'
 
 /** Tie-break order when the same name exists in several modalities, and
  *  the fallback order when a link names a loggable but no stream. */
-export const NAV_MODALITY_ORDER: NavModality[] = ['text', 'metric', 'image', 'audio']
+export const NAV_MODALITY_ORDER: NavModality[] = ['text', 'metric', 'image', 'audio', 'action']
 
 /** Every stream name a loggable carries, per modality. Names go through
  *  the same `name || 'media'` fallback the feeds use to group cards, so a
@@ -31,6 +31,11 @@ function namesByModality(run: RunState, loggableId: string): Record<NavModality,
     metric: Object.keys(run.loggableMetrics[loggableId] ?? {}),
     image: dedupe(run.loggableImages[loggableId]),
     audio: dedupe(run.loggableAudio[loggableId]),
+    // Scene frames repeat their name once per step, so the dedupe here is
+    // doing real work — unlike the media slices where it is a formality.
+    action: dedupe(
+      (run.loggableActions[loggableId] ?? []).map(f => ({ name: f.name || 'scene' })),
+    ),
   }
 }
 
