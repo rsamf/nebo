@@ -15,6 +15,12 @@ const MODALITY_LABELS: Record<StreamModality, string> = {
 }
 const MODALITIES = STREAM_MODALITIES
 
+// Shown in tooltips so the shortcuts are discoverable from the buttons.
+const modKeyLabel =
+  typeof navigator !== 'undefined' && /Mac|iP(hone|ad|od)/.test(navigator.platform)
+    ? '⌘'
+    : 'Ctrl' 
+
 // Modality toggle chips. Desktop renders them in the tree column under the
 // stream search field (hidden while the tracker is collapsed); mobile puts
 // them in the Filters popover.
@@ -80,20 +86,50 @@ export function TrackerControls({ minStep, maxStep, hasSteps, activeModalities, 
     selectStep(Math.max(minStep, Math.min(maxStep, cur + d)))
   }, [hasSteps, timeline.step, minStep, maxStep, selectStep])
 
-  // Ctrl/⌘ + Left/Right steps the playhead (skips when typing in a field).
+  // Tracker keyboard shortcuts. All of them skip while the user is typing
+  // in a field, and while a dialog/popover has focus, so they never steal
+  // a keystroke meant for something else.
+  //
+  //   Ctrl/⌘ + Left/Right  step the playhead
+  //   Space                play / pause
+  //   Ctrl/⌘ + Backspace   clear all filters
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (!e.ctrlKey && !e.metaKey) return
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
-      const tag = (e.target as HTMLElement)?.tagName
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
-      if (!hasSteps) return
-      e.preventDefault()
-      stepBy(e.key === 'ArrowRight' ? 1 : -1)
+      if (target?.isContentEditable) return
+      // Radix selects, popovers and dialogs use Space/Enter for their own
+      // selection, so never steal a keystroke aimed at open UI.
+      if (target?.closest(
+        '[role="dialog"],[role="listbox"],[role="menu"],[aria-expanded="true"],'
+        + '[data-radix-popper-content-wrapper]',
+      )) return
+      const mod = e.ctrlKey || e.metaKey
+
+      if (mod && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        if (!hasSteps) return
+        e.preventDefault()
+        stepBy(e.key === 'ArrowRight' ? 1 : -1)
+        return
+      }
+      if (mod && e.key === 'Backspace') {
+        e.preventDefault()
+        onClearFilters()
+        return
+      }
+      if (e.key === ' ' && !mod && !e.altKey && !e.shiftKey) {
+        if (!hasSteps) return
+        // Space would otherwise scroll the page — and, if the play button
+        // itself still has focus from a click, fire it a second time.
+        e.preventDefault()
+        if (target?.tagName === 'BUTTON') target.blur()
+        setPlaying(!useStore.getState().timeline.playing)
+      }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [hasSteps, stepBy])
+  }, [hasSteps, stepBy, onClearFilters, setPlaying])
 
   const modeSelect = (triggerClass: string) => (
     <Select value={timeline.mode} onValueChange={(v) => setMode(v as 'time' | 'step')}>
@@ -144,19 +180,19 @@ export function TrackerControls({ minStep, maxStep, hasSteps, activeModalities, 
 
       {/* Step navigation + playback stay in the bar on both layouts. */}
       <div className="flex items-center gap-0.5">
-        <Button variant="ghost" className="h-7 w-7 p-0" disabled={!hasSteps} title="Previous step" onClick={() => stepBy(-1)}>
+        <Button variant="ghost" className="h-7 w-7 p-0" disabled={!hasSteps} title={`Previous step (${modKeyLabel}+←)`} onClick={() => stepBy(-1)}>
           <ChevronLeft size={15} />
         </Button>
         <Button
           variant="ghost"
           className="h-7 w-7 p-0"
           disabled={!hasSteps}
-          title={timeline.playing ? 'Pause' : 'Play through steps'}
+          title={timeline.playing ? 'Pause (Space)' : 'Play through steps (Space)'}
           onClick={() => setPlaying(!timeline.playing)}
         >
           {timeline.playing ? <Pause size={15} /> : <Play size={15} />}
         </Button>
-        <Button variant="ghost" className="h-7 w-7 p-0" disabled={!hasSteps} title="Next step" onClick={() => stepBy(1)}>
+        <Button variant="ghost" className="h-7 w-7 p-0" disabled={!hasSteps} title={`Next step (${modKeyLabel}+→)`} onClick={() => stepBy(1)}>
           <ChevronRight size={15} />
         </Button>
       </div>
@@ -194,7 +230,7 @@ export function TrackerControls({ minStep, maxStep, hasSteps, activeModalities, 
           <Button variant="ghost" className="h-7 w-7 p-0" title="Reset zoom" onClick={onResetZoom}>
             <Maximize size={14} />
           </Button>
-          <Button variant="ghost" className="h-7 px-2 text-xs text-muted-foreground" title="Clear all filters" onClick={onClearFilters}>
+          <Button variant="ghost" className="h-7 px-2 text-xs text-muted-foreground" title={`Clear all filters (${modKeyLabel}+Backspace)`} onClick={onClearFilters}>
             Clear all filters
           </Button>
         </>

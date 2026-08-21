@@ -163,7 +163,7 @@ export function RightPanelSettings() {
             onChange={(v) => updateSetting<keyof SettingsType>('bodyOpacity', v)}
           />
           <label className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">Show collision geometry</span>
+            <span>Show collision geometry</span>
             <input
               type="checkbox"
               className="accent-primary"
@@ -181,9 +181,7 @@ export function RightPanelSettings() {
             onChange={(v) => updateSetting<keyof SettingsType>('collisionOpacity', v)}
           />
           <div className="flex items-center gap-2">
-            <span className="flex-1 text-xs text-muted-foreground">
-              Model offset
-            </span>
+            <span className="flex-1 text-xs">Model offset</span>
             {(['modelOffsetX', 'modelOffsetY'] as const).map((key, i) => (
               <label key={key} className="flex items-center gap-1">
                 <span className="text-[10px] text-muted-foreground">
@@ -202,12 +200,8 @@ export function RightPanelSettings() {
               </label>
             ))}
           </div>
-          <p className="text-[10px] leading-snug text-muted-foreground">
-            Spacing between instances, laid out on a 2-column grid. 0 keeps
-            each instance at its logged position.
-          </p>
           <label className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">Tint instances</span>
+            <span>Tint instances</span>
             <input
               type="checkbox"
               className="accent-primary"

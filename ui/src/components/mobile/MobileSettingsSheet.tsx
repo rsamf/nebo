@@ -108,7 +108,7 @@ export function MobileSettingsSheet({
             onChange={v => updateSetting('bodyOpacity', v)}
           />
           <label className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">Show collision geometry</span>
+            <span className="text-[13px] font-medium">Show collision geometry</span>
             <input
               type="checkbox"
               className="accent-primary"
@@ -126,7 +126,7 @@ export function MobileSettingsSheet({
             onChange={v => updateSetting('collisionOpacity', v)}
           />
           <div className="flex items-center gap-2">
-            <span className="flex-1 text-xs text-muted-foreground">Model offset</span>
+            <span className="flex-1 text-[13px] font-medium">Model offset</span>
             {(['modelOffsetX', 'modelOffsetY'] as const).map((key, i) => (
               <label key={key} className="flex items-center gap-1">
                 <span className="text-[10px] text-muted-foreground">
