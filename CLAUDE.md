@@ -237,14 +237,32 @@ writes stay synchronous; the cache interaction is a `queue.put`.
 - **Read-path decimation**: `GET /runs/{id}/metrics?points=N` (default
   2000, `points=0` = full) caps accumulating series server-side —
   min/max-per-bucket for line (spikes survive), uniform stride for
-  scatter — annotating each series with `total_points`/`downsampled`
-  (`daemon.py:downsample_series`, never mutates RAM state). The UI
-  hydrates in two phases: the decimated default paints charts
-  immediately, then a `points=0` fetch delivers **every** datapoint and
-  replaces the series (users always end up with full data). The per-chart
-  "N of M pts" badge and the run-level "loading history…" hint
-  (`hydratingRuns`) only show during that window; CLI/MCP read via the
-  loggable endpoint and stay full-fidelity.
+  scatter — annotating each series with `total_points`/`downsampled`.
+  The policy lives in **`nebo/server/decimate.py:keep_indices`** with
+  exactly two callers: `daemon.downsample_series` for RAM-resident runs
+  and `cache._metrics_for` for cached ones, so a run returns the same
+  points before and after eviction. Neither mutates RAM state.
+  - **The cap must be applied before points become Python objects.** The
+    SQL path converts only the rows that survive decimation; parsing every
+    stored point and *then* thinning cost more than the scan itself
+    (measured on a 1.5M-point run: 11.4 s, of which 4.3 s was `json.loads`
+    twice per row for points immediately discarded — now 4.8 s).
+    `_fast_float` reads a line point's value with `float()` rather than
+    `json.loads` for the same reason.
+  - **The read runs in a worker thread** (`asyncio.to_thread`). It is
+    O(stored points) even when decimating, so on the event loop one heavy
+    run made every other request — including `/health` — queue behind it,
+    and the daemon looked hung. Regression-tested in
+    `tests/test_metrics_decimation.py`; don't move it back onto the loop.
+  - The UI hydrates in two phases: the decimated default paints charts
+    immediately, then a `points=0` fetch delivers every datapoint —
+    **unless the run exceeds `FULL_FIDELITY_LIMIT` (250k points)**, where
+    the full payload is ~123 MB of JSON to draw charts a few hundred
+    pixels wide. Those runs keep the decimated series; line decimation is
+    min/max per bucket, so no spike is lost. The per-chart "N of M pts"
+    badge and the run-level "loading history…" hint (`hydratingRuns`) show
+    during that window; CLI/MCP read via the loggable endpoint and stay
+    full-fidelity.
 - **Deep-ingest never floods**: `ingest_events(..., broadcast=False)` is
   used by the watcher's deepen catch-up (a file's whole history — browsers
   hydrate via REST instead); live tailing (`_read_appended`) still
