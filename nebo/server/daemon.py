@@ -26,6 +26,7 @@ from nebo.server.cache import (
     RunCache,
     media_id_for,
 )
+from nebo.server.decimate import keep_indices, numeric
 from nebo.server.protocol import MessageType, decode_batch
 from nebo.server.workspace import (
     is_remote_uri,
@@ -205,49 +206,30 @@ DEFAULT_METRIC_POINTS = 2000
 def downsample_series(series: dict, points: int) -> dict:
     """Cap an accumulating series' entries for the wire.
 
-    Line series use per-bucket min/max decimation (two kept points per
-    bucket — preserves spikes a uniform stride would erase); scatter uses a
-    uniform stride (its per-entry values aren't scalar). Snapshot types
-    pass through untouched. Always annotates ``total_points`` and
+    The selection policy lives in `nebo/server/decimate.py` so the RAM path
+    here and the SQL path in `cache._metrics_for` cannot disagree about
+    which points a run returns. Always annotates ``total_points`` /
     ``downsampled`` so the UI can show "N of M pts". Never mutates the
     input — RAM-path callers hand over live series references.
     """
     entries = series.get("entries") or []
     total = len(entries)
-    stype = series.get("type", "line")
     annotated = dict(series)
     annotated["total_points"] = total
     annotated["downsampled"] = False
-    if points <= 0 or total <= points or stype not in ("line", "scatter"):
-        return annotated
 
-    if stype == "scatter":
-        stride = -(-total // points)  # ceil
-        keep_idx = list(range(0, total, stride))
-        if keep_idx[-1] != total - 1:
-            keep_idx.append(total - 1)
-    else:
-        n_buckets = max(1, points // 2)
-        keep: set[int] = {0, total - 1}
-        for b in range(n_buckets):
-            lo = (b * total) // n_buckets
-            hi = max(lo + 1, ((b + 1) * total) // n_buckets)
-            imin = imax = lo
-            vmin = vmax = None
-            for i in range(lo, min(hi, total)):
-                v = entries[i].get("value")
-                if not isinstance(v, (int, float)):
-                    continue
-                if vmin is None or v < vmin:
-                    vmin, imin = v, i
-                if vmax is None or v > vmax:
-                    vmax, imax = v, i
-            keep.add(imin)
-            keep.add(imax)
-        keep_idx = sorted(keep)
-    annotated["entries"] = [entries[i] for i in keep_idx]
+    keep = keep_indices(
+        [numeric(e.get("value")) for e in entries]
+        if series.get("type", "line") == "line" else [None] * total,
+        series.get("type", "line"),
+        points,
+    )
+    if keep is None:
+        return annotated
+    annotated["entries"] = [entries[i] for i in keep]
     annotated["downsampled"] = True
     return annotated
+
 
 _ALERT_LEVEL_NAMES = {10: "DEBUG", 20: "INFO", 30: "WARN", 40: "ERROR"}
 
@@ -585,14 +567,25 @@ class DaemonState:
             return self.cache.get_texts(run_id, loggable_id=loggable_id, limit=limit)
         return None
 
-    def run_metrics(self, run_id: str) -> Optional[dict]:
+    def run_metrics(self, run_id: str, points: int = 0) -> Optional[dict]:
+        """Metric series for a run, already capped at `points` per series.
+
+        The cap is applied by whichever layer holds the data: SQL for a
+        cached run (so a million-point series never becomes a million Python
+        dicts), `downsample_series` for a RAM-resident one (where the points
+        are objects we already own). Both produce the same entries.
+        """
         run = self._resident(run_id)
         if run is not None:
             return {
-                lid: l.metrics for lid, l in run.loggables.items() if l.metrics
+                lid: {
+                    name: downsample_series(series, points)
+                    for name, series in l.metrics.items()
+                }
+                for lid, l in run.loggables.items() if l.metrics
             }
         if self.cache is not None and self.cache.has_run(run_id):
-            return self.cache.get_metrics(run_id)
+            return self.cache.get_metrics(run_id, points=points)
         return None
 
     def run_loggable(self, run_id: str, loggable_id: str) -> Optional[dict]:
@@ -1968,16 +1961,13 @@ def create_daemon_app(state: DaemonState | None = None, port: int | None = None)
     @app.get("/runs/{run_id}/metrics")
     async def get_run_metrics(run_id: str, points: int = DEFAULT_METRIC_POINTS):
         await state.ensure_deep(run_id)
-        metrics = state.run_metrics(run_id)
+        # Off the event loop: even decimated, this walks SQL rows and builds
+        # dicts, and a run with millions of points would otherwise stall
+        # every other request — including /health — until it finished.
+        metrics = await asyncio.to_thread(state.run_metrics, run_id, points)
         if metrics is None:
             return JSONResponse(status_code=404, content={"error": f"Run '{run_id}' not found"})
-        return {"metrics": {
-            lid: {
-                name: downsample_series(series, points)
-                for name, series in series_map.items()
-            }
-            for lid, series_map in metrics.items()
-        }}
+        return {"metrics": metrics}
 
     @app.get("/runs/{run_id}/images")
     async def get_run_images(run_id: str):

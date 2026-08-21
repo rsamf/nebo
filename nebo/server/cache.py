@@ -43,6 +43,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from nebo.server.decimate import keep_indices
 from nebo.server.workspace import normalize_workspace, read_frame_bytes
 
 try:
@@ -790,9 +791,34 @@ class RunCache:
         ).fetchall()
         return [json.loads(r["json"]) for r in rows]
 
+    @staticmethod
+    def _fast_float(raw: Optional[str]) -> Optional[float]:
+        """Numeric value of a stored metric, without a JSON parse.
+
+        A line point's `value_json` is a bare number, so `float()` reads it
+        directly. Anything else (a scatter dict, a malformed row) is not a
+        scalar and decimation treats it as absent, exactly as the RAM path
+        does. This matters because it runs once per stored point: `json.loads`
+        here cost more than the entire SQL scan.
+        """
+        if not raw:
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            return None
+
     def _metrics_for(
         self, run_id: str, loggable_id: Optional[str] = None,
+        points: int = 0,
     ) -> dict[str, dict[str, dict]]:
+        """Metric series for a run, optionally capped at `points` per series.
+
+        Rows are scanned once, but only the points that survive decimation
+        are turned into entry dicts. That is the whole trick: a 1.5M-point
+        run used to pay `json.loads` twice for every stored point and then
+        throw 92% of them away.
+        """
         import json
 
         conn = self._read_conn()
@@ -805,24 +831,49 @@ class RunCache:
             rows = conn.execute(
                 "SELECT * FROM metrics WHERE run_id=? ORDER BY rowid", (run_id,)
             ).fetchall()
-        out: dict[str, dict[str, dict]] = {}
+
+        grouped: dict[str, dict[str, list]] = {}
         for r in rows:
-            series = out.setdefault(r["loggable_id"], {}).setdefault(
-                r["name"], {"type": r["metric_type"], "entries": []}
-            )
-            entry: dict[str, Any] = {
-                "step": r["step"],
-                "value": json.loads(r["value_json"]) if r["value_json"] else None,
-                "tags": json.loads(r["tags_json"]) if r["tags_json"] else [],
-                "timestamp": r["ts"],
-            }
-            if r["colors"] is not None:
-                entry["colors"] = bool(r["colors"])
-            series["entries"].append(entry)
+            grouped.setdefault(r["loggable_id"], {}).setdefault(
+                r["name"], []
+            ).append(r)
+
+        out: dict[str, dict[str, dict]] = {}
+        for lid, by_name in grouped.items():
+            for name, series_rows in by_name.items():
+                stype = series_rows[0]["metric_type"]
+                total = len(series_rows)
+                keep = keep_indices(
+                    [self._fast_float(r["value_json"]) for r in series_rows]
+                    if stype == "line" else [None] * total,
+                    stype,
+                    points,
+                )
+                kept = series_rows if keep is None else [series_rows[i] for i in keep]
+                entries: list[dict[str, Any]] = []
+                for r in kept:
+                    entry: dict[str, Any] = {
+                        "step": r["step"],
+                        "value": json.loads(r["value_json"]) if r["value_json"] else None,
+                        "tags": json.loads(r["tags_json"]) if r["tags_json"] else [],
+                        "timestamp": r["ts"],
+                    }
+                    if r["colors"] is not None:
+                        entry["colors"] = bool(r["colors"])
+                    entries.append(entry)
+                series: dict[str, Any] = {"type": stype, "entries": entries}
+                if points > 0:
+                    series["total_points"] = total
+                    series["downsampled"] = keep is not None
+                out.setdefault(lid, {})[name] = series
         return out
 
-    def get_metrics(self, run_id: str) -> dict[str, dict[str, dict]]:
-        return self._metrics_for(run_id)
+    def get_metrics(
+        self, run_id: str, points: int = 0,
+    ) -> dict[str, dict[str, dict]]:
+        """A run's metric series. ``points > 0`` caps each accumulating
+        series, converting only the points that survive."""
+        return self._metrics_for(run_id, points=points)
 
     def get_loggable(self, run_id: str, loggable_id: str) -> Optional[dict]:
         """Mirror of the /runs/{id}/loggables/{lid} payload built from SQL."""
