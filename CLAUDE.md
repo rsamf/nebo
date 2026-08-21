@@ -529,14 +529,21 @@ one scene frame. Load-bearing decisions:
   robot description formats. Quaternions are **vector-scalar (xyzw)**, the
   sole accepted convention, named in every parameter and wire field.
   `nebo/logging/bodies.py:normalize_instances` accepts `(N,7)`, `(N,4,4)`,
-  or a `{label: poses}` dict (the `log_bar`/`log_scatter` convention) and
-  flattens to `{instance: [7N floats]}`; flat costs ~half of nested in
-  msgpack.
+  or a `{label: poses}` dict (the `log_bar`/`log_scatter` convention), and
+  emits `{instance: <7N little-endian float32 bytes>}` — msgpack has no
+  float32 for Python floats, so a list costs 9 B/value against 4. It also
+  brings framework tensors home (`.detach().cpu()`) and rejects non-unit
+  quaternions, which otherwise render silently sheared. Every consumer
+  decodes through `decode_poses`, which accepts bytes, base64 or a plain
+  list (pre-float32 files); the daemon decodes once at ingest so RAM, the
+  cache's JSON column, HTTP and the UI all see a list.
 - **`log_body_model` is eager**, unlike the deferred `log_image`/`log_audio`
   path, because the returned ref must carry the GLB's content address
   (`model_id == media_id == sha256(glb)[:16]`). It is a one-shot setup call;
   re-publishing identical bytes within a run returns the cached ref and
-  emits nothing. `_body_models` is **per-run** state (a new run must
+  emits nothing — but under a *new* name it registers an alias and returns
+  a ref carrying that name, since publishing one robot twice is how you
+  compare two policies. `_body_models` is **per-run** state (a new run must
   re-publish, since the GLB rode in the old run's event stream).
 - **A model is ordinary content-addressed media**, so it rides in the
   `.nebo` file, dedupes across runs, resolves by `(src_path, offset, length)`
@@ -587,9 +594,16 @@ strand the claimed slot as an empty placeholder). Instance tinting is on
 when a scene has more than one instance, off for a lone model; **comparison
 views merge every run into ONE scene**, keyed `<run>·<instance>` and tinted
 by run identity, rather than a grid of viewers (browsers cap live WebGL
-contexts). Opacity / show-collision / collision-opacity / tint live in the
-global `Settings` slice and are surfaced both in the settings panels and a
-per-card popover writing the same keys. Embeds: `?actions` / `?action=NAME`.
+contexts). Opacity / show-collision / collision-opacity / tint / model-offset-x/y live
+in the global `Settings` slice and are surfaced in `RightPanelSettings` and
+`MobileSettingsSheet` only — there is deliberately **no per-card control
+popover**. `sceneSources.ts:gridOffset` lays instances out on a centred
+2-column grid spaced by the offsets (n=2 horizontal, n=3 a pair plus one,
+n=4 a 2x2), applied to every body **except body 0** so the ground stays put
+under the grid; slots are assigned over *visible* instances so hiding one
+re-packs. Visual body-0 geometry is also exempt from the opacity slider —
+fading the floor just lets you see through it. Embeds: `?actions` /
+`?action=NAME`.
 
 ### Image labels (`nb.labels.*`)
 

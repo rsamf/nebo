@@ -14,6 +14,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { instantiate } from './glbCache'
 import { POSE_STRIDE, parseBodyNode, parseGeomKind } from './sceneNodes'
+import { gridOffset } from './sceneSources'
 
 export interface SceneInstance {
   /** Stable identity within the scene; changing it rebuilds the instance. */
@@ -32,6 +33,9 @@ export interface SceneViewerProps {
   bodyOpacity: number
   showCollision: boolean
   collisionOpacity: number
+  /** Grid spacing (metres) between instances; 0 keeps logged positions. */
+  offsetX: number
+  offsetY: number
   className?: string
 }
 
@@ -52,7 +56,8 @@ function meshMaterials(mesh: THREE.Mesh): THREE.Material[] {
 }
 
 export default function SceneViewer({
-  instances, bodyOpacity, showCollision, collisionOpacity, className,
+  instances, bodyOpacity, showCollision, collisionOpacity,
+  offsetX, offsetY, className,
 }: SceneViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sceneRef = useRef<THREE.Scene | null>(null)
@@ -252,10 +257,17 @@ export default function SceneViewer({
 
   // --- write poses (every frame change) ---
   useEffect(() => {
+    const visibleCount = instances.filter(i => i.visible).length
+    let slot = 0
     for (const instance of instances) {
       const loaded = loadedRef.current.get(instance.key)
       if (!loaded) continue
       loaded.root.visible = instance.visible
+      // Grid slots are assigned over VISIBLE instances only, so hiding one
+      // from the legend re-packs the grid instead of leaving a hole.
+      const [dx, dy] = instance.visible
+        ? gridOffset(slot++, visibleCount, offsetX, offsetY)
+        : [0, 0]
       const pose = instance.pose
       for (const [index, node] of loaded.bodies) {
         const at = index * POSE_STRIDE
@@ -263,7 +275,13 @@ export default function SceneViewer({
         // mismatched frame) leaves the remaining bodies where they were
         // rather than collapsing them onto the origin.
         if (at + POSE_STRIDE > pose.length) continue
-        node.position.set(pose[at], pose[at + 1], pose[at + 2])
+        // Body 0 is the world frame — the ground and other scenery. It
+        // stays where it was logged so the grid sits ON the floor rather
+        // than dragging a copy of it around.
+        const shift = index === 0 ? 0 : 1
+        node.position.set(
+          pose[at] + dx * shift, pose[at + 1] + dy * shift, pose[at + 2],
+        )
         node.quaternion.set(
           pose[at + 3], pose[at + 4], pose[at + 5], pose[at + 6],
         )
@@ -305,7 +323,7 @@ export default function SceneViewer({
     camera.updateProjectionMatrix()
     controls.update()
     framedRef.current = true
-  }, [instances, loadedVersion])
+  }, [instances, loadedVersion, offsetX, offsetY])
 
   // --- appearance: opacity, collision visibility, per-instance tint ---
   useEffect(() => {
@@ -319,16 +337,25 @@ export default function SceneViewer({
       if (!loaded) continue
       const drawsWorld = primary
       if (instance.visible) primary = false
-      const apply = (meshes: THREE.Mesh[], opacity: number, shown: boolean) => {
+      const apply = (
+        meshes: THREE.Mesh[], opacity: number, shown: boolean,
+        collision: boolean,
+      ) => {
         for (const mesh of meshes) {
           const isWorld = loaded.world.has(mesh)
-          mesh.visible = shown && (!isWorld || drawsWorld)
+          // The ground is scenery, not a body. Fading it with the model
+          // opacity slider only makes the scene murky and lets you see
+          // through the floor, so visual world geometry stays fully
+          // opaque and visible regardless of the slider.
+          const scenery = isWorld && !collision
+          const effective = scenery ? 1 : opacity
+          mesh.visible = isWorld ? (drawsWorld && (scenery || shown)) : shown
           for (const m of meshMaterials(mesh)) {
-            m.opacity = opacity
+            m.opacity = effective
             // Transparency is enabled only when it is actually needed:
             // an always-transparent material sorts badly and costs fill.
-            m.transparent = opacity < 1
-            m.depthWrite = opacity >= 1
+            m.transparent = effective < 1
+            m.depthWrite = effective >= 1
             const colored = m as THREE.Material & { color?: THREE.Color }
             if (!colored.color) continue
             const base = loaded.baseColors.get(m)
@@ -337,8 +364,11 @@ export default function SceneViewer({
           }
         }
       }
-      apply(loaded.visual, bodyOpacity, bodyOpacity > 0)
-      apply(loaded.collision, collisionOpacity, showCollision && collisionOpacity > 0)
+      apply(loaded.visual, bodyOpacity, bodyOpacity > 0, false)
+      apply(
+        loaded.collision, collisionOpacity,
+        showCollision && collisionOpacity > 0, true,
+      )
     }
   }, [instances, bodyOpacity, showCollision, collisionOpacity, loadedVersion])
 

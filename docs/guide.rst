@@ -211,11 +211,23 @@ shared step and watch the episode — the metrics, text and images beside it
 follow the same playhead. The card's display menu controls model opacity,
 collision-geometry visibility and its opacity, and instance tinting.
 
+Instances are laid out on a grid in the viewer (**Model offset** in the
+settings panel) so bodies logged at the same world position don't
+interpenetrate — the logged poses are untouched, only the display moves.
+
 .. note::
 
     A model's visual and collision geometry are both published. Collision
     shapes are authored for the physics engine rather than the eye, so they
     are hidden until you turn them on.
+
+.. note::
+
+    ``log_body_model`` embeds the compiled model in the run, so a run costs
+    your model's size once — a mesh-heavy humanoid can be tens of megabytes.
+    Pose frames are cheap by comparison (4 bytes per number). The daemon
+    content-addresses models, so re-logging the same robot across runs
+    stores one copy server-side, but each ``.nebo`` file carries its own.
 
 Configuration
 -------------

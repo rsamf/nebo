@@ -46,6 +46,12 @@ from nebo.logging.logger import (
 
 T = TypeVar("T")
 
+try:
+    from importlib.metadata import PackageNotFoundError, version as _pkg_version
+    __version__ = _pkg_version("nebo")
+except Exception:  # pragma: no cover - source checkout without metadata
+    __version__ = "0.0.0.dev0"
+
 _auto_init_done = False
 logger = _stdlib_logging.getLogger(__name__)
 
@@ -512,6 +518,23 @@ class _RunContext:
         state._active_run_id = None
 
 
+def run_id() -> Optional[str]:
+    """The active run's id, or ``None`` if no run has materialized yet.
+
+    A run materializes on the first real event, so this returns ``None``
+    for a process that has only called ``nb.init()`` / ``nb.md()``. Use it
+    to print or persist where results went::
+
+        rid = nb.run_id()
+        print(f"results: nebo://run/{rid}")
+
+    Does not itself create a run — reading where output went should never
+    be the thing that produces output.
+    """
+    _ensure_init()
+    return get_state()._active_run_id
+
+
 def start_run(
     name: Optional[str] = None,
     config: Optional[dict] = None,
@@ -639,6 +662,7 @@ def start_run(
 
 
 __all__ = [
+    "__version__",
     "fn",
     "track",
     "init",
@@ -657,6 +681,7 @@ __all__ = [
     "labels",
     "groups",
     "ui",
+    "run_id",
     "start_run",
     "get_state",
     "DaemonLocalOnlyError",

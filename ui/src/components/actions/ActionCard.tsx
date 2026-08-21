@@ -6,7 +6,6 @@ import { HeaderActions } from '@/components/node-tabs/HeaderActions'
 import { Modal } from '@/components/ui/modal'
 import { buildEmbeddedUrl } from '@/hooks/useEmbeddedView'
 import { pickFrame, sceneFrames, useActionFrame } from '@/hooks/useActionFrame'
-import { ActionDisplayPopover } from './ActionDisplayPopover'
 import { buildInstances, type SceneSource } from './sceneSources'
 
 // The 3D stack loads only when a scene is actually rendered. Every import
@@ -113,6 +112,8 @@ export function ActionCard({
         bodyOpacity={settings.bodyOpacity}
         showCollision={settings.showCollision}
         collisionOpacity={settings.collisionOpacity}
+        offsetX={settings.modelOffsetX}
+        offsetY={settings.modelOffsetY}
         className="h-full w-full"
       />
     </Suspense>
@@ -129,13 +130,10 @@ export function ActionCard({
             {showTimestamp && headline && formatTimestamp(headline.timestamp)}
           </span>
         </div>
-        <div className="flex shrink-0 items-center gap-0.5">
-          <ActionDisplayPopover showTint={labels.length > 1} />
-          <HeaderActions
-            onExpand={() => setExpanded(true)}
-            iframeUrl={buildEmbeddedUrl({ runId, node: loggableId, action: name })}
-          />
-        </div>
+        <HeaderActions
+          onExpand={() => setExpanded(true)}
+          iframeUrl={buildEmbeddedUrl({ runId, node: loggableId, action: name })}
+        />
       </div>
 
       <div

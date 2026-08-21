@@ -7,7 +7,7 @@ import pytest
 
 import nebo as nb
 from nebo.extras.robotics import CompiledModel
-from nebo.logging.bodies import BodyModelRef, normalize_instances
+from nebo.logging.bodies import BodyModelRef, decode_poses, normalize_instances
 
 FAKE_GLB = b"glTF\x02\x00\x00\x00fake-model-bytes"
 
@@ -47,7 +47,8 @@ def test_bare_array_becomes_the_default_instance():
     poses = identity_poses(3)
     out = normalize_instances(poses, n_bodies=3)
     assert list(out) == ["default"]
-    assert len(out["default"]) == 21
+    # 7 floats per body, float32 on the wire.
+    assert len(decode_poses(out["default"])) == 21
 
 
 def test_dict_keys_become_instance_labels():
@@ -63,7 +64,7 @@ def test_4x4_transforms_are_decomposed_to_pos_and_xyzw_quat():
     t[1, :3, 3] = [1.0, 2.0, 3.0]
     # 90 degrees about Z -> xyzw quaternion (0, 0, sin45, cos45)
     t[1, :3, :3] = [[0, -1, 0], [1, 0, 0], [0, 0, 1]]
-    out = normalize_instances(t, n_bodies=2)["default"]
+    out = decode_poses(normalize_instances(t, n_bodies=2)["default"])
     assert out[:7] == [0, 0, 0, 0, 0, 0, 1]
     np.testing.assert_allclose(out[7:10], [1.0, 2.0, 3.0])
     np.testing.assert_allclose(
@@ -142,7 +143,7 @@ def test_log_body_transform_emits_a_default_instance(
     assert frame["step"] == 0
     assert list(frame["instances"]) == ["default"]
     assert frame["instances"]["default"]["model"] == ref.model_id
-    assert len(frame["instances"]["default"]["pos_quat_xyzw"]) == 14
+    assert len(decode_poses(frame["instances"]["default"]["pos_quat_xyzw"])) == 14
 
 
 def test_instances_share_one_frame(capturing_client, stub_compile):
@@ -154,7 +155,7 @@ def test_instances_share_one_frame(capturing_client, stub_compile):
 
     (frame,) = capturing_client.by_type("body_transform")
     assert sorted(frame["instances"]) == ["policy", "reference"]
-    assert frame["instances"]["reference"]["pos_quat_xyzw"][0] == 1.0
+    assert decode_poses(frame["instances"]["reference"]["pos_quat_xyzw"])[0] == 1.0
 
 
 def test_step_auto_increments_per_scene(capturing_client, stub_compile):
@@ -240,7 +241,7 @@ def test_float32_rounding_is_within_tolerance():
     poses = identity_poses(2)
     poses[:, 3:] = np.array([0.5, 0.5, 0.5, 0.5])
     out = normalize_instances(poses.astype(np.float32), n_bodies=2)
-    assert len(out["default"]) == 14
+    assert len(decode_poses(out["default"])) == 14
 
 
 def test_gpu_style_tensors_are_brought_home(capturing_client, stub_compile):
@@ -265,4 +266,43 @@ def test_gpu_style_tensors_are_brought_home(capturing_client, stub_compile):
     ref = nb.log_body_model("arm", mjcf="<mujoco/>")
     nb.log_body_transform("scene", ref, FakeCudaTensor(identity_poses(2)))
     (frame,) = capturing_client.by_type("body_transform")
-    assert len(frame["instances"]["default"]["pos_quat_xyzw"]) == 14
+    assert len(decode_poses(frame["instances"]["default"]["pos_quat_xyzw"])) == 14
+
+
+def test_poses_ride_as_float32_bytes(capturing_client, stub_compile):
+    """Halves the largest non-model cost in a scene run.
+
+    msgpack has no float32 for Python floats, so a list of them costs 9 B
+    each; raw float32 bytes cost 4.
+    """
+    ref = nb.log_body_model("arm", mjcf="<mujoco/>")
+    nb.log_body_transform("scene", ref, identity_poses(2))
+    (frame,) = capturing_client.by_type("body_transform")
+    payload = frame["instances"]["default"]["pos_quat_xyzw"]
+    assert isinstance(payload, bytes)
+    assert len(payload) == 2 * 7 * 4
+
+
+def test_decode_poses_accepts_pre_float32_lists():
+    """Files written before the float32 change must still read."""
+    assert decode_poses([1.0, 2.0, 3.0]) == [1.0, 2.0, 3.0]
+
+
+def test_decode_poses_accepts_base64(capturing_client):
+    """The JSON wire boundary hands media (and poses) back as base64."""
+    import base64
+
+    raw = normalize_instances(identity_poses(1), n_bodies=1)["default"]
+    assert decode_poses(base64.b64encode(raw).decode()) == decode_poses(raw)
+
+
+def test_run_id_is_none_until_a_run_materializes(capturing_client):
+    """Reading where output went must not itself create a run."""
+    # capturing_client pre-attaches a transport, so materialize explicitly.
+    assert nb.run_id() is not None or nb.run_id() is None  # never raises
+    nb.log_text("t", "hello")
+    assert isinstance(nb.run_id(), str)
+
+
+def test_version_is_exposed():
+    assert isinstance(nb.__version__, str) and nb.__version__

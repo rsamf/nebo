@@ -11,9 +11,15 @@ One instance's poses arrive as either
 
 and a dict of either keyed by instance label puts several bodies in one
 scene, mirroring the ``{label: value}`` convention of ``log_bar`` /
-``log_pie`` / ``log_scatter``. Everything leaves this module as a flat
-list of ``7 * N`` floats, which costs roughly half of what nested lists
-cost in msgpack.
+``log_pie`` / ``log_scatter``.
+
+Everything leaves this module as ``7 * N`` **little-endian float32 values
+packed as raw bytes**. msgpack has no float32 for Python floats, so a
+list of them costs 9 B each; positions are millimetre-scale and
+quaternions are unit, so float32 loses nothing that matters and halves
+the largest non-model cost in a scene run. Consumers accept a plain list
+too — see :func:`decode_poses` — so files written before this change
+still read.
 
 Quaternions are vector-scalar (``xyzw``). There is exactly one accepted
 convention and it is named in the parameter.
@@ -100,8 +106,32 @@ def _as_array(value: Any):
     return np.asarray(value, dtype=np.float64)
 
 
-def _flatten_one(value: Any, n_bodies: int, label: str) -> list[float]:
-    """One instance's poses -> a flat list of ``7 * n_bodies`` floats."""
+#: Wire dtype for pose payloads: little-endian float32.
+POSE_DTYPE = "<f4"
+
+
+def decode_poses(value: Any) -> list[float]:
+    """Wire pose payload -> a flat list of floats.
+
+    Accepts the float32 bytes writers emit today, a base64 string (the
+    JSON wire boundary), or a plain list (pre-float32 files, and anything
+    hand-authored). Consumers must go through this rather than assuming a
+    shape, exactly as media accepts both bytes and base64.
+    """
+    import numpy as np
+
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return np.frombuffer(bytes(value), dtype=POSE_DTYPE).tolist()
+    if isinstance(value, str):
+        import base64
+
+        raw = base64.b64decode(value)
+        return np.frombuffer(raw, dtype=POSE_DTYPE).tolist()
+    return [float(v) for v in (value or ())]
+
+
+def _flatten_one(value: Any, n_bodies: int, label: str) -> bytes:
+    """One instance's poses -> ``7 * n_bodies`` float32 values as bytes."""
     import numpy as np
 
     arr = _as_array(value)
@@ -143,13 +173,13 @@ def _flatten_one(value: Any, n_bodies: int, label: str) -> list[float]:
             f"expected 1. Poses are [x, y, z, qx, qy, qz, qw] with a unit "
             f"quaternion in xyzw order."
         )
-    return [float(v) for v in arr.reshape(-1)]
+    return arr.reshape(-1).astype(POSE_DTYPE, copy=False).tobytes()
 
 
 def normalize_instances(
     value: Any, n_bodies: int,
-) -> dict[str, list[float]]:
-    """Normalize a pose payload to ``{instance_label: flat 7N floats}``.
+) -> dict[str, bytes]:
+    """Normalize a pose payload to ``{instance_label: float32 bytes}``.
 
     A bare array is shorthand for a single ``"default"`` instance; a dict
     names one instance per key, exactly like ``log_bar``'s
@@ -161,7 +191,7 @@ def normalize_instances(
                 "pos_quat_xyzw: the instance dict is empty; pass at least "
                 "one {label: poses} entry"
             )
-        out: dict[str, list[float]] = {}
+        out: dict[str, bytes] = {}
         for label, poses in value.items():
             if not isinstance(label, str) or not label:
                 raise TypeError(

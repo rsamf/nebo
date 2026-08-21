@@ -50,6 +50,11 @@ export interface Settings {
   // reads apart from a policy-actuated one. Single-instance scenes keep
   // the model's own materials (see ActionCard).
   tintInstances: boolean
+  // Spacing (metres) between instances laid out on a 2-column grid, so
+  // several bodies logged at the same world position don't interpenetrate.
+  // 0 leaves every instance at its logged position.
+  modelOffsetX: number
+  modelOffsetY: number
 }
 
 const SETTINGS_KEY = 'gb_settings'
@@ -70,6 +75,8 @@ const DEFAULT_SETTINGS: Settings = {
   showCollision: false,
   collisionOpacity: 0.35,
   tintInstances: true,
+  modelOffsetX: 2,
+  modelOffsetY: 2,
 }
 
 function loadSettings(): Settings {

@@ -58,3 +58,28 @@ export function buildInstances(
   return out
 }
 
+
+/**
+ * Where instance `i` of `n` sits on the display grid.
+ *
+ * Two columns, filled left-to-right then top-to-bottom, centred on the
+ * origin: n=2 is a horizontal pair, n=3 is a pair plus one on its own row,
+ * n=4 is a 2x2. A lone instance is never moved.
+ *
+ * This is a DISPLAY transform — the logged world poses are untouched, and
+ * body 0 (the world frame's scenery) never moves, so the ground stays put
+ * under the grid.
+ */
+export function gridOffset(
+  index: number, count: number, offsetX: number, offsetY: number,
+): [number, number] {
+  if (count <= 1) return [0, 0]
+  const cols = Math.min(count, 2)
+  const rows = Math.ceil(count / cols)
+  const col = index % cols
+  const row = Math.floor(index / cols)
+  return [
+    (col - (cols - 1) / 2) * offsetX,
+    (row - (rows - 1) / 2) * offsetY,
+  ]
+}

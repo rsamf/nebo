@@ -186,6 +186,21 @@ Example::
     :param name: Optional audio clip name.
     :param step: Optional step counter.
 
+.. function:: nb.run_id() -> str | None
+
+    The active run's id, or ``None`` if no run has materialized yet. A run
+    materializes on the first real event, so this returns ``None`` for a
+    process that has only called ``nb.init()`` or ``nb.md()``. Reading it
+    never creates a run.
+
+    Use it to record where a batch job's results went::
+
+        print(f"results: nebo://run/{nb.run_id()}")
+
+.. data:: nb.__version__
+
+    The installed nebo version.
+
 .. function:: nb.log_body_model(name: str, *, mjcf: Any = None, urdf: Any = None) -> BodyModelRef
 
     Publish a robot or scene description for the **action** modality, and

@@ -286,3 +286,36 @@ def test_summary_parity_across_eviction(tmp_path):
         assert after["latest_step"] == before["latest_step"] == 3
     finally:
         cache.close()
+
+
+def test_ingest_decodes_float32_pose_bytes():
+    """The daemon normalizes poses to lists so RAM/cache/HTTP/UI agree."""
+    from nebo.logging.bodies import normalize_instances
+
+    state = DaemonState()
+    state.create_run("sim.py", run_id="r1")
+    poses = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]] * 2
+    packed = normalize_instances(poses, n_bodies=2)["default"]
+    _ingest(state, "r1", [{
+        "type": "body_transform", "loggable_id": "__global__",
+        "name": "scene", "step": 0, "timestamp": 1.0,
+        "instances": {"a": {"model": "abc123", "pos_quat_xyzw": packed}},
+    }])
+    frame = state.run_actions("r1")["actions"]["__global__"][0]
+    values = frame["instances"]["a"]["pos_quat_xyzw"]
+    assert isinstance(values, list)
+    assert len(values) == 14
+    assert values[6] == 1.0
+
+
+def test_ingest_still_accepts_plain_lists():
+    """Pre-float32 .nebo files replay unchanged."""
+    state = DaemonState()
+    state.create_run("sim.py", run_id="r1")
+    _ingest(state, "r1", [{
+        "type": "body_transform", "loggable_id": "__global__",
+        "name": "scene", "step": 0, "timestamp": 1.0,
+        "instances": {"a": {"model": "abc123", "pos_quat_xyzw": [0.0] * 14}},
+    }])
+    frame = state.run_actions("r1")["actions"]["__global__"][0]
+    assert len(frame["instances"]["a"]["pos_quat_xyzw"]) == 14

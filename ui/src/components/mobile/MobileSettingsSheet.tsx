@@ -58,6 +58,8 @@ export function MobileSettingsSheet({
     updateSetting('bodyOpacity', 1)
     updateSetting('showCollision', false)
     updateSetting('collisionOpacity', 0.35)
+    updateSetting('modelOffsetX', 2)
+    updateSetting('modelOffsetY', 2)
     setAllLabelOpacities(70)
   }
 
@@ -123,6 +125,25 @@ export function MobileSettingsSheet({
             format={v => `${Math.round(v * 100)}%`}
             onChange={v => updateSetting('collisionOpacity', v)}
           />
+          <div className="flex items-center gap-2">
+            <span className="flex-1 text-xs text-muted-foreground">Model offset</span>
+            {(['modelOffsetX', 'modelOffsetY'] as const).map((key, i) => (
+              <label key={key} className="flex items-center gap-1">
+                <span className="text-[10px] text-muted-foreground">
+                  {i === 0 ? 'x' : 'y'}
+                </span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  step={0.5}
+                  value={settings[key]}
+                  onChange={e => updateSetting(key, Math.max(0, Number(e.target.value)))}
+                  className="h-8 w-16 rounded-md border border-border bg-transparent px-2 text-xs"
+                />
+              </label>
+            ))}
+          </div>
           {visibleLabelTriples.length > 0 && (
             <SettingSlider
               label="Image label opacity"

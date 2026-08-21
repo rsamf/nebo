@@ -59,6 +59,42 @@ Format versions:
           table and every ingest path normalizes ``log`` → ``text``, so
           older files decode unchanged.
 
+        * (Later amendment, no version bump.) The **action modality** adds
+          two entry types::
+
+              body_model     (21)  {type, loggable_id, name, model_id,
+                                    body_names, source_format,
+                                    data: <glb bytes>}
+              body_transform (22)  {type, loggable_id, name, step, timestamp,
+                                    instances: {label: {model: model_id,
+                                        pos_quat_xyzw: <7N f32 LE bytes>}}}
+
+          ``body_model`` is a media entry like ``image`` / ``audio``: its
+          ``data`` holds a self-contained GLB whose ``sha256(...)[:16]`` is
+          both ``model_id`` and the daemon's media id.
+
+          ``body_transform`` is one frame of a 3D scene. Each instance
+          carries ``7 * N`` values -- ``[x, y, z, qx, qy, qz, qw]`` per body,
+          in the model's body order. Quaternions are **vector-scalar
+          (xyzw)**; that is the sole accepted convention and it is named in
+          the field. Poses are **world transforms**, never joint
+          coordinates, so no consumer needs forward kinematics.
+
+          The payload is packed as **little-endian float32 bytes** (msgpack
+          bin): msgpack has no float32 for Python floats, so a list costs
+          9 B per value against 4, and positions are millimetre-scale while
+          quaternions are unit. Readers go through
+          ``nebo/logging/bodies.py:decode_poses``, which also accepts a
+          plain list (files written before this change) and base64 -- the
+          same accept-both rule media follows.
+
+          These codes are additive and deliberately do **not** bump
+          ``FORMAT_VERSION``. An older reader maps an unknown type byte to
+          ``unknown_<n>`` and recovers the real type from ``payload["type"]``
+          (the same path that ingests alert frames), then drops the event it
+          does not understand -- whereas a version bump would make
+          ``read_header`` reject the whole file.
+
 Event semantics note: ``run_completed`` (code 16) is a *writer-finalization
 marker* only — it flushes the file's final frame and, on the daemon, closes
 the per-run writer. It carries no lifecycle state: there is no ``ended_at``

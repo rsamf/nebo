@@ -26,6 +26,7 @@ from nebo.server.cache import (
     RunCache,
     media_id_for,
 )
+from nebo.logging.bodies import decode_poses
 from nebo.server.protocol import MessageType, decode_batch
 from nebo.server.workspace import (
     is_remote_uri,
@@ -1460,7 +1461,21 @@ class DaemonState:
         elif etype == "body_transform":
             if loggable_id:
                 lg = self._ensure_loggable(run, loggable_id)
-                instances = event.get("instances") or {}
+                # Poses arrive as float32 bytes (older files carry plain
+                # lists). Decode once here so RAM, the cache's JSON column,
+                # the HTTP payload and the UI all see the same shape — and
+                # so the event dict that gets broadcast is JSON-safe.
+                instances = {
+                    label: {
+                        **inst,
+                        "pos_quat_xyzw": decode_poses(
+                            inst.get("pos_quat_xyzw")
+                        ),
+                    }
+                    for label, inst in (event.get("instances") or {}).items()
+                    if isinstance(inst, dict)
+                }
+                event["instances"] = instances
                 step = event.get("step")
                 timestamp = event.get("timestamp", time.time())
                 name = event.get("name", "")
@@ -1479,9 +1494,7 @@ class DaemonState:
                 # 30-body two-instance frame is ~420 floats), so charge the
                 # RAM budget by float count rather than as one point.
                 floats = sum(
-                    len(i.get("pos_quat_xyzw") or ())
-                    for i in instances.values()
-                    if isinstance(i, dict)
+                    len(i.get("pos_quat_xyzw") or ()) for i in instances.values()
                 )
                 run.resident_points += max(1, (floats * 32) // 372)
                 self._cache_put((
