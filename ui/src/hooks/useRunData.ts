@@ -7,6 +7,12 @@ import { api, type TextEntry, type MetricEntry, type LoggableMetricSeries } from
 // worth issuing.
 const DEFAULT_ACTION_FRAMES = 2000
 
+// Above this many points in a run, the UI keeps the server-decimated
+// series instead of refetching every datapoint. Chosen so the full payload
+// stays in the tens of MB; line decimation is min/max per bucket, so
+// spikes survive the cap.
+const FULL_FIDELITY_LIMIT = 250_000
+
 // ─── Non-destructive hydration ────────────────────────────────────────────
 //
 // REST hydration and the live WebSocket both write the same run slices. If a
@@ -102,18 +108,29 @@ function fetchSingleRun(runId: string, store: ReturnType<typeof useStore.getStat
       setRunTexts(runId, mergeTexts(normalized, current()?.texts ?? []))
     }),
     // Two-phase metrics hydration: the decimated default paints charts
-    // immediately (a million-point run would otherwise be a ~70 MB first
-    // response), then EVERY datapoint is delivered — if anything was
+    // immediately, then EVERY datapoint is delivered — if anything was
     // decimated, a full-fidelity (`points: 0`) fetch replaces the series
     // wholesale. The per-chart "N of M pts" badge only shows during the
     // window between the two, and `hydratingRuns` stays set until the
     // full payload has landed.
+    //
+    // ...up to a point. Past FULL_FIDELITY_LIMIT the full payload stops
+    // being worth it: a 1.5M-point training run is ~123 MB of JSON that
+    // takes seconds to build, seconds to transfer and seconds to parse, to
+    // draw charts that are a few hundred pixels wide. Those runs keep the
+    // decimated series — which preserves every spike, since line
+    // decimation is min/max per bucket — and the badge keeps saying so.
     api.getRunMetrics(runId).then(d => {
       setRunMetrics(runId, mergeMetrics(d.metrics, current()?.loggableMetrics ?? {}))
-      const anyDownsampled = Object.values(d.metrics).some(byName =>
-        Object.values(byName).some(s => s.downsampled),
-      )
-      if (!anyDownsampled) return
+      let total = 0
+      let anyDownsampled = false
+      for (const byName of Object.values(d.metrics)) {
+        for (const s of Object.values(byName)) {
+          total += s.total_points ?? s.entries.length
+          anyDownsampled ||= !!s.downsampled
+        }
+      }
+      if (!anyDownsampled || total > FULL_FIDELITY_LIMIT) return
       return api.getRunMetrics(runId, { points: 0 }).then(full =>
         setRunMetrics(runId, mergeMetrics(full.metrics, current()?.loggableMetrics ?? {})),
       )
